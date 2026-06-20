@@ -78,11 +78,21 @@ namespace
     std::mutex g_clientCompatMutex;
     std::string g_lastClientGameVersion;
     std::string g_lastClientModHash;
+
+    // Set by loadBuiltInKeysOrWarn() on the worker thread when the built-in
+    // rendezvous keys / master-server config are missing; consumed once by the
+    // Server Browser on the main thread to show a non-fatal notice.
+    std::atomic<bool> g_masterServerUnavailable{false};
 }
 
 bool isRendezvousConnectionActive()
 {
     return g_rendezvousFlowActive.load();
+}
+
+bool consumeMasterServerUnavailableWarning()
+{
+    return g_masterServerUnavailable.exchange(false);
 }
 
 static bool readKeyFile(const std::string& path, unsigned char* out, size_t n)
@@ -180,6 +190,25 @@ static bool loadBuiltInKeysOrFail(RendezvousClient::ServerKeys& keys)
     {
         DebugLog(("Rendezvous built-in key load failed: " + err + "\n").c_str());
         onConnect = -3;
+        return false;
+    }
+    return true;
+}
+
+// Variant of loadBuiltInKeysOrFail() for the passive/background server-list
+// refresh. On failure it does NOT set the global onConnect state (which the
+// main loop would escalate into a fatal "Server error. Connection closed."
+// dialog that tears down the Server Browser). Instead it flags the condition so
+// the Server Browser can show a non-fatal notice on the main thread while
+// leaving the browser open for Direct Connect / Host. Returns false (empty list)
+// on failure. Runs on a worker thread, so it must not touch UI directly.
+static bool loadBuiltInKeysOrWarn(RendezvousClient::ServerKeys& keys)
+{
+    std::string err;
+    if (!loadBuiltInRendezvousKeys(keys, &err))
+    {
+        DebugLog(("Rendezvous server list unavailable: " + err + "\n").c_str());
+        g_masterServerUnavailable.store(true);
         return false;
     }
     return true;
@@ -1160,7 +1189,7 @@ bool refreshServerListViaRendezvous(const std::string& rendezvousHost,
     outRooms.clear();
 
     RendezvousClient::ServerKeys keys;
-    if (!loadBuiltInKeysOrFail(keys))
+    if (!loadBuiltInKeysOrWarn(keys))
         return false;
 
     RendezvousClient::ListConfig cfg;

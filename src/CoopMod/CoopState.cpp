@@ -414,6 +414,24 @@ CoopState::CoopState(int state)
 
 	}
 
+	// MASTER SERVER UNAVAILABLE (e.g. open-source build with no rendezvous config)
+	// Informational only: shown on top of the Server Browser. Unlike state 440 it
+	// does NOT disconnect and does NOT popState() in the constructor, so the
+	// browser underneath stays alive. State 446 is not in previous()'s disconnect
+	// list, so the OK button just pops this dialog and returns to the browser,
+	// leaving Direct Connect / Host available.
+	if (state == 446)
+	{
+
+		_txtTitle->setSmall();
+		_txtTitle->setWordWrap(true);
+		_txtTitle->setY(50);
+		_txtTitle->setHeight(90);
+		_txtTitle->setText("Master server unavailable in this build.\n\nThe server browser will not list any games, and UDP / online play is unavailable.\n\nTo play co-op, use 'Direct Connect' with NETWORK set to TCP, or host a TCP game.");
+		_btnBack->setVisible(true);
+
+	}
+
 	if (state == 16)
 	{
 		_txtTitle->setText("Cannot connect to server");
