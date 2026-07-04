@@ -702,6 +702,7 @@ void connectionTCP::transferSoldierOwnership(Soldier* soldier, int newOwnerId, b
 		sendSoldierTransferPacket(soldier, newOwnerId);
 		removeSoldierFromLocalBases(soldier);
 		_transferredSoldiers.push_back(soldier);
+		_transferredAwaySoldierIds.insert(soldier->getId());
 
 	}
 
@@ -713,32 +714,38 @@ void connectionTCP::processPendingSoldierTransfers()
 	if (_game->getSavedGame() && !_game->getSavedGame()->getSavedBattle() && getCoopStatic() && getCoopCampaign() && _pendingSoldierTransfers.empty())
 	{
 
-		// Invariant sweep: outside battle, this machine's live save must not
-		// contain soldiers owned by the peer (their object lives in the
-		// peer's save). Stale copies can resurrect e.g. when the pre-visit
-		// "basehost" snapshot is restored after a transfer made while viewing
-		// the peer's base. Park them instead of deleting (UI states may still
-		// hold pointers).
-		int localPlayerId = getHost() ? 0 : 1;
-
-		for (auto& base : *_game->getSavedGame()->getBases())
+		// Targeted sweep: a stale copy of a soldier we transferred away this
+		// session can resurrect when the pre-visit "basehost" snapshot is
+		// restored after a transfer made while viewing the peer's base. Park
+		// exactly those (matched by id AND still peer-owned - a soldier
+		// traded back to us has our owner id and is left alone). Deliberately
+		// NOT a blanket owner check: legacy saves carry stale ownerPlayerId
+		// values on unrelated soldiers.
+		if (!_transferredAwaySoldierIds.empty())
 		{
 
-			auto& soldiers = *base->getSoldiers();
+			int localPlayerId = getHost() ? 0 : 1;
 
-			for (auto it = soldiers.begin(); it != soldiers.end();)
+			for (auto& base : *_game->getSavedGame()->getBases())
 			{
 
-				Soldier* s = *it;
+				auto& soldiers = *base->getSoldiers();
 
-				if (s->getOwnerPlayerId() != 999 && s->getOwnerPlayerId() != localPlayerId)
+				for (auto it = soldiers.begin(); it != soldiers.end();)
 				{
-					_transferredSoldiers.push_back(s);
-					it = soldiers.erase(it);
-				}
-				else
-				{
-					++it;
+
+					Soldier* s = *it;
+
+					if (_transferredAwaySoldierIds.count(s->getId()) != 0 && s->getOwnerPlayerId() != 999 && s->getOwnerPlayerId() != localPlayerId)
+					{
+						_transferredSoldiers.push_back(s);
+						it = soldiers.erase(it);
+					}
+					else
+					{
+						++it;
+					}
+
 				}
 
 			}
@@ -772,6 +779,7 @@ void connectionTCP::processPendingSoldierTransfers()
 		sendSoldierTransferPacket(soldier, pending.second);
 		removeSoldierFromLocalBases(soldier);
 		_transferredSoldiers.push_back(soldier);
+		_transferredAwaySoldierIds.insert(soldier->getId());
 
 	}
 
