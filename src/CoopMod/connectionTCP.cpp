@@ -52,6 +52,7 @@
 
 #include "PasswordCheckMenu.h"
 #include "ModCheckMenu.h"
+#include "TransferNoticeState.h"
 #include "connectionUDP/connection_udp_glue.h"
 
 #include "../Engine/Logger.h"
@@ -2219,8 +2220,59 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 
 				// Our SavedGame is currently swapped out for the peer's base
 				// view; applying the transfer now would land the soldier in
-				// the temporary world and lose it on exit. Replay later.
+				// the temporary world and lose it on exit. Queue the real
+				// apply for later, but ALSO drop a display copy into the
+				// visited base so the new owner sees the soldier right away,
+				// and show the notification now.
 				Log(LOG_INFO) << "[coop-transfer] RECV deferred (viewing peer base)";
+
+				try
+				{
+
+					int stationBaseId = obj["station_base_id"].asInt();
+
+					YAML::YamlRootNodeReader reader(YAML::YamlString{obj["soldier_yaml"].asString()}, "transferSoldier");
+					auto soldierReader = reader["soldier"];
+					std::string type = soldierReader["type"].readVal(_game->getMod()->getSoldiersList().front());
+					std::string soldierName = soldierReader["name"].readVal(std::string());
+
+					Base* visited = 0;
+
+					for (auto& base : *_game->getSavedGame()->getBases())
+					{
+						if (base->_coop_base_id == stationBaseId)
+						{
+							visited = base;
+							break;
+						}
+					}
+
+					if (visited && _game->getMod()->getSoldier(type))
+					{
+						// Display-only copy: this world is discarded on exit;
+						// the durable copy comes from the deferred replay.
+						Soldier* copy = new Soldier(_game->getMod()->getSoldier(type), 0, 0 /*nationality*/);
+						copy->load(soldierReader, _game->getMod(), _game->getSavedGame(), _game->getMod()->getScriptGlobal());
+						copy->setCraft(0);
+						copy->setCoopBase(stationBaseId);
+						copy->setOwnerPlayerId(owner);
+						copy->setCoop(owner);
+						visited->getSoldiers()->push_back(copy);
+					}
+
+					if (!obj.get("notified", false).asBool())
+					{
+						std::string baseName = visited ? visited->getName() : "their base";
+						_game->pushState(new TransferNoticeState(getCurrentClientName() + " transferred ownership of " + soldierName + " to you at base " + baseName));
+						obj["notified"] = true;
+					}
+
+				}
+				catch (const std::exception& e)
+				{
+					Log(LOG_INFO) << "[coop-transfer] RECV display-copy failed: " << e.what();
+				}
+
 				_pendingIncomingTransfers.push_back(obj);
 
 			}
@@ -2363,6 +2415,29 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 							Log(LOG_INFO) << "[coop-transfer] RECV added soldier '" << soldier->getName()
 							              << "' id=" << soldier->getId() << " to base '" << targetBase->getName()
 							              << "' coopBase=" << soldier->getCoopBase();
+
+							// Tell the new owner (skip if the deferred path
+							// already notified during a base visit). The
+							// station base's name is the one the player
+							// recognizes - for a guest that's the giver's
+							// (mirror) base, not the own base holding it.
+							if (!obj.get("notified", false).asBool())
+							{
+
+								std::string baseName = targetBase->getName();
+
+								for (auto& base : *_game->getSavedGame()->getBases())
+								{
+									if (base->_coop_base_id == stationBaseId)
+									{
+										baseName = base->getName();
+										break;
+									}
+								}
+
+								_game->pushState(new TransferNoticeState(getCurrentClientName() + " transferred ownership of " + soldier->getName() + " to you at base " + baseName));
+
+							}
 
 						}
 

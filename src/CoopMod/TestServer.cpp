@@ -45,6 +45,7 @@
 #include "CoopState.h"
 #include "LobbyMenu.h"
 #include "Profile.h"
+#include "TransferNoticeState.h"
 #include "TransferSoldierMenu.h"
 #include "connectionTCP.h"
 
@@ -694,6 +695,26 @@ std::string TestServer::execute(const std::string& line)
 			else
 			{
 				resp["error"] = "soldier not found: " + name;
+			}
+		}
+		else if (cmd == "dismiss_notice")
+		{
+			TransferNoticeState* st = nullptr;
+			for (auto* s : _game->getStates())
+			{
+				if (auto* x = dynamic_cast<TransferNoticeState*>(s))
+				{
+					st = x;
+				}
+			}
+			if (st)
+			{
+				st->btnOkClick(nullptr);
+				resp["ok"] = true;
+			}
+			else
+			{
+				resp["error"] = "no TransferNoticeState in state stack";
 			}
 		}
 		else if (cmd == "cancel_dialog")
