@@ -471,6 +471,13 @@ class connectionTCP
 	// other
 	static int manuallyAddedServerRemoveID;
 	static bool canRemoveManuallyAddedServer;
+
+	// Permanently transfers a soldier to another player (0 = host, 1 = client).
+	// Updates the persistent owner id, the co-op control flags, and any live
+	// battlescape unit; when broadcast is true the change is sent to the peer.
+	// Unlike the legacy "giveUnit" loan this overwrites unconditionally, so
+	// soldiers can be traded back and forth any number of times.
+	void transferSoldierOwnership(Soldier* soldier, int newOwnerId, bool broadcast);
 };
 
 }
