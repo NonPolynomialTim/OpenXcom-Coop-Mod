@@ -107,7 +107,10 @@ def test_bug1a_list_open(host, client):
     client.wait_for("client list open", lambda: any("SoldiersState" in s for s in client.cmd({"cmd": "get_state"})["states"]) or None)
 
     host.ok({"cmd": "transfer", "name": soldier, "owner": 1})
-    time.sleep(3)
+
+    # notification must pop on the receiver
+    client.wait_for("transfer notice", lambda: any("TransferNoticeState" in s for s in client.cmd({"cmd": "get_state"})["states"]) or None, timeout=30)
+    client.ok({"cmd": "dismiss_notice"})
     client.ok({"cmd": "soldiers_ok"})
 
     def present():
@@ -119,7 +122,7 @@ def test_bug1a_list_open(host, client):
         return None
 
     client.wait_for("soldier survived list-open transfer", present, timeout=30)
-    print(f"PASS bug1a: '{soldier}' survived transfer with client's own list open")
+    print(f"PASS bug1a: '{soldier}' survived transfer with client's own list open (+notice shown)")
 
 
 def test_bug1b_mirror_open(host, client):
@@ -131,21 +134,36 @@ def test_bug1b_mirror_open(host, client):
     client.wait_for("inside peer base", lambda: client.cmd({"cmd": "get_coop"}).get("insideCoopBase") or None, timeout=60)
 
     host.ok({"cmd": "transfer", "name": soldier, "owner": 1})
-    time.sleep(3)
+
+    # notice pops immediately, and the visited base shows the soldier NOW
+    client.wait_for("transfer notice while visiting", lambda: any("TransferNoticeState" in s for s in client.cmd({"cmd": "get_state"})["states"]) or None, timeout=30)
+
+    def visible_in_visited_world():
+        r = client.cmd({"cmd": "get_soldiers"})
+        if not r.get("ok"):
+            return None
+        for b in r["bases"]:
+            if b["coopBaseId"] == host_base_id:
+                for s in b["soldiers"]:
+                    if s["name"] == soldier and s["owner"] == 1:
+                        return s
+        return None
+
+    client.wait_for("soldier visible inside visited base", visible_in_visited_world, timeout=15)
+    client.ok({"cmd": "dismiss_notice"})
 
     client.ok({"cmd": "leave_base"})
     client.wait_for("back in own world", lambda: (not client.cmd({"cmd": "get_coop"}).get("insideCoopBase")) or None, timeout=60)
 
     def present():
         r = client.cmd({"cmd": "get_mirror_soldiers", "coopBaseId": host_base_id})
-        if r.get("ok"):
-            for s in r["soldiers"]:
-                if s["name"] == soldier and s["owner"] == 1:
-                    return s
-        return None
+        if not r.get("ok"):
+            return None
+        hits = [s for s in r["soldiers"] if s["name"] == soldier and s["owner"] == 1]
+        return hits[0] if len(hits) == 1 else None  # exactly one - no dup
 
-    client.wait_for("soldier survived mirror-open transfer", present, timeout=30)
-    print(f"PASS bug1b: '{soldier}' survived transfer during peer-base visit")
+    client.wait_for("exactly one durable copy after visit", present, timeout=30)
+    print(f"PASS bug1b: '{soldier}' visible during visit, notice shown, exactly one copy after leaving")
 
 
 def main():

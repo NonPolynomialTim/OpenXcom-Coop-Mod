@@ -143,6 +143,7 @@ set ( coopmod_src
   CoopMod/OptionsMultiplayer.cpp
   CoopMod/Profile.cpp
   CoopMod/TestServer.cpp
+  CoopMod/TransferNoticeState.cpp
   CoopMod/TransferSoldierMenu.cpp
 )
 
