@@ -38,9 +38,12 @@ int TransferSoldierMenu::resolveOwnerId(Soldier *soldier)
 	{
 		return soldier->getOwnerPlayerId();
 	}
-	// 999 = never explicitly assigned; the co-op control flag mirrors the
-	// merged-world convention (0 = host, non-zero = client).
-	return soldier->getCoop() != 0 ? 1 : 0;
+	// 999 = never explicitly assigned. Such a soldier belongs to the player
+	// whose save it lives in - i.e. the LOCAL player, on whichever machine
+	// the dialog is open. (The old fallback returned 0/host, which on the
+	// client's machine offered the client their own name as a transfer
+	// target for their own fresh soldiers.)
+	return connectionTCP::getHost() ? 0 : 1;
 }
 
 TransferSoldierMenu::TransferSoldierMenu(Soldier *soldier, int currentOwnerId) : _soldier(soldier)
@@ -86,18 +89,22 @@ TransferSoldierMenu::TransferSoldierMenu(Soldier *soldier, int currentOwnerId) :
 	}
 	_btnCancel = new TextButton(windowWidth - 40, btnHeight, windowX + 20, y);
 
-	setInterface("pauseMenu", false, _game->getSavedGame() ? _game->getSavedGame()->getSavedBattle() : 0);
+	// sackSoldier: a base-palette dialog interface. Using pauseMenu here
+	// (geoscape palette) forced a hardware palette swap when opened over the
+	// basescape soldier screens, flashing the whole screen on open and close.
+	// The battle-game param switches to the battlescape palette in battle.
+	setInterface("sackSoldier", false, _game->getSavedGame() ? _game->getSavedGame()->getSavedBattle() : 0);
 
-	add(_window, "window", "pauseMenu");
-	add(_txtTitle, "text", "pauseMenu");
+	add(_window, "window", "sackSoldier");
+	add(_txtTitle, "text", "sackSoldier");
 	for (auto *btn : _btnTargets)
 	{
-		add(btn, "button", "pauseMenu");
+		add(btn, "button", "sackSoldier");
 	}
-	add(_btnCancel, "button", "pauseMenu");
+	add(_btnCancel, "button", "sackSoldier");
 
 	centerAllSurfaces();
-	setWindowBackground(_window, "pauseMenu");
+	setWindowBackground(_window, "sackSoldier");
 
 	_txtTitle->setAlign(ALIGN_CENTER);
 	_txtTitle->setWordWrap(true);

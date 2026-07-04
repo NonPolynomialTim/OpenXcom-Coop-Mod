@@ -511,6 +511,11 @@ class connectionTCP
 	// existing local one. Sender stamps each packet with a unique id instead.
 	int _transferSendCounter = 0;
 	std::unordered_set<long long> _seenTransferPacketIds;
+	// Incoming physical transfers received while our SavedGame is swapped out
+	// (viewing the peer's base, playerInsideCoopBase). Applying them then
+	// would mutate the temporary peer world and be discarded on exit - the
+	// soldier would vanish on both machines. Replayed once our world is back.
+	std::vector<Json::Value> _pendingIncomingTransfers;
 };
 
 }
