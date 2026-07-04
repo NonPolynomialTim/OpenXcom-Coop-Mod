@@ -821,6 +821,220 @@ void connectionTCP::processPendingSoldierTransfers()
 
 }
 
+std::vector<std::string> connectionTCP::coopTransferLog;
+
+void connectionTCP::appendTransferReceipt(const Json::Value& receipt)
+{
+
+	Json::FastWriter w;
+	std::string line = w.write(receipt);
+
+	if (!line.empty() && line.back() == '\n')
+	{
+		line.pop_back();
+	}
+
+	coopTransferLog.push_back(line);
+
+	// FIFO cap so saves don't grow without bound.
+	while (coopTransferLog.size() > 100)
+	{
+		coopTransferLog.erase(coopTransferLog.begin());
+	}
+
+}
+
+void connectionTCP::sendTransferLogSummary()
+{
+
+	Json::Value obj;
+	obj["state"] = "transferLog";
+	Json::Value sent(Json::arrayValue);
+	Json::Value recv(Json::arrayValue);
+
+	Json::CharReaderBuilder rb;
+	std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+
+	for (auto& line : coopTransferLog)
+	{
+
+		Json::Value r;
+		std::string errs;
+
+		if (reader->parse(line.data(), line.data() + line.size(), &r, &errs))
+		{
+
+			Json::Value entry;
+			entry["x"] = r["x"];
+			entry["sid"] = r["sid"];
+			entry["n"] = r["n"];
+
+			if (r["d"].asString() == "s")
+			{
+				sent.append(entry);
+			}
+			else
+			{
+				recv.append(entry);
+			}
+
+		}
+
+	}
+
+	obj["sent"] = sent;
+	obj["recv"] = recv;
+
+	Log(LOG_INFO) << "[coop-transfer] SYNC sending receipt summary: " << sent.size() << " sent, " << recv.size() << " recv";
+
+	sendTCPPacketData(obj.toStyledString());
+
+}
+
+void connectionTCP::reconcileTransferLog(const Json::Value& obj)
+{
+
+	// Parse our own receipts once.
+	std::unordered_set<long long> mySentIds;
+	std::vector<Json::Value> mySentFull;
+
+	Json::CharReaderBuilder rb;
+	std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+
+	for (auto& line : coopTransferLog)
+	{
+
+		Json::Value r;
+		std::string errs;
+
+		if (reader->parse(line.data(), line.data() + line.size(), &r, &errs))
+		{
+
+			if (r["d"].asString() == "s")
+			{
+				mySentIds.insert(r["x"].asInt64());
+				mySentFull.push_back(r);
+			}
+
+		}
+
+	}
+
+	std::unordered_set<long long> peerRecvIds;
+
+	for (const auto& e : obj["recv"])
+	{
+		peerRecvIds.insert(e["x"].asInt64());
+	}
+
+	// Case 1: the peer holds a soldier we supposedly sent, but our (rolled
+	// back) save has no record of sending it - our copy is a stale duplicate.
+	for (const auto& e : obj["recv"])
+	{
+
+		long long x = e["x"].asInt64();
+
+		if (mySentIds.count(x) != 0)
+		{
+			continue;
+		}
+
+		int sid = e["sid"].asInt();
+		std::string name = e["n"].asString();
+
+		if (_game->getSavedGame())
+		{
+
+			bool removed = false;
+
+			for (auto& base : *_game->getSavedGame()->getBases())
+			{
+
+				auto& soldiers = *base->getSoldiers();
+
+				for (auto it = soldiers.begin(); it != soldiers.end(); ++it)
+				{
+
+					if ((*it)->getId() == sid && (*it)->getName() == name)
+					{
+
+						Log(LOG_INFO) << "[coop-transfer] SYNC removing stale duplicate '" << name << "' id=" << sid << " (peer owns it, our save predates the transfer)";
+
+						Soldier* stale = *it;
+						stale->setCraft(0);
+
+						// Synthetic sent-receipt INCLUDING the soldier data:
+						// if the peer later rolls back too, we can still
+						// resend from this - otherwise the soldier would be
+						// gone from both saves forever.
+						int stationId = stale->getCoopBase() != -1 ? stale->getCoopBase() : base->_coop_base_id;
+
+						YAML::YamlRootNodeWriter w;
+						w.setAsMap();
+						stale->save(w["soldier"], _game->getMod()->getScriptGlobal());
+
+						Json::Value receipt;
+						receipt["x"] = Json::Value::Int64(x);
+						receipt["d"] = "s";
+						receipt["sid"] = sid;
+						receipt["n"] = name;
+						receipt["o"] = getHost() ? 1 : 0; // the peer owns it now
+						receipt["b"] = stationId;
+						receipt["y"] = w.emit().yaml;
+						appendTransferReceipt(receipt);
+
+						_transferredSoldiers.push_back(stale);
+						soldiers.erase(it);
+						removed = true;
+
+						break;
+
+					}
+
+				}
+
+				if (removed)
+				{
+					break;
+				}
+
+			}
+
+		}
+
+	}
+
+	// Case 2: we have a sent-receipt (with the soldier's YAML) that the peer
+	// never recorded receiving - their save was rolled back past the
+	// transfer. Resend the original packet; their dedup won't block it (the
+	// id is in neither their session set nor their receipts).
+	for (auto& r : mySentFull)
+	{
+
+		long long x = r["x"].asInt64();
+
+		if (peerRecvIds.count(x) != 0 || !r.isMember("y"))
+		{
+			continue;
+		}
+
+		Log(LOG_INFO) << "[coop-transfer] SYNC resending transfer x=" << x << " soldier '" << r["n"].asString() << "' (peer save predates it)";
+
+		Json::Value pkt;
+		pkt["state"] = "transferSoldier";
+		pkt["soldier_id"] = r["sid"];
+		pkt["owner"] = r["o"];
+		pkt["unit_id"] = -1;
+		pkt["station_base_id"] = r["b"];
+		pkt["xfer_id"] = r["x"];
+		pkt["soldier_yaml"] = r["y"];
+
+		sendTCPPacketData(pkt.toStyledString());
+
+	}
+
+}
+
 void connectionTCP::sendSoldierTransferPacket(Soldier* soldier, int newOwnerId)
 {
 
@@ -860,15 +1074,32 @@ void connectionTCP::sendSoldierTransferPacket(Soldier* soldier, int newOwnerId)
 	writer.setAsMap();
 	soldier->save(writer["soldier"], _game->getMod()->getScriptGlobal());
 
+	// Durable unique id: player tag + wall-clock + counter. Receipts persist
+	// in saves across sessions, so a per-run counter alone would collide.
+	long long xferId = (getHost() ? 1000000000000000LL : 2000000000000000LL) + (long long)time(0) * 1000LL + (++_transferSendCounter % 1000);
+
+	std::string yaml = writer.emit().yaml;
+
 	Json::Value obj;
 	obj["state"] = "transferSoldier";
 	obj["soldier_id"] = soldier->getId();
 	obj["owner"] = newOwnerId;
 	obj["unit_id"] = -1;
 	obj["station_base_id"] = stationBaseId;
-	// unique per sender: local player id in the high digits + counter
-	obj["xfer_id"] = Json::Value::Int64((getHost() ? 1000000LL : 2000000LL) + (++_transferSendCounter));
-	obj["soldier_yaml"] = writer.emit().yaml;
+	obj["xfer_id"] = Json::Value::Int64(xferId);
+	obj["soldier_yaml"] = yaml;
+
+	// Sent receipt (with the YAML, so a rolled-back receiver can be healed by
+	// resending). Persisted in the save; see reconcileTransferLog().
+	Json::Value receipt;
+	receipt["x"] = Json::Value::Int64(xferId);
+	receipt["d"] = "s";
+	receipt["sid"] = soldier->getId();
+	receipt["n"] = soldier->getName();
+	receipt["o"] = newOwnerId;
+	receipt["b"] = stationBaseId;
+	receipt["y"] = yaml;
+	appendTransferReceipt(receipt);
 
 	std::string packet = obj.toStyledString();
 
@@ -929,6 +1160,21 @@ void connectionTCP::updateCoopTask()
 	// active (fallback for the client, which may not run the host's
 	// coopMissionEnd path in GeoscapeState).
 	processPendingSoldierTransfers();
+
+	// coop: once per session, exchange transfer receipts so saves rolled back
+	// past a transfer get reconciled (no duplicated / vanished soldiers).
+	if (getCoopStatic() && getCoopCampaign() && connectionTCP::isCoopSessionLocked && connectionTCP::isLobbyMenuClosed && _game->getSavedGame() && !_game->getSavedGame()->getSavedBattle() && playerInsideCoopBase == false)
+	{
+		if (!_transferLogSynced)
+		{
+			_transferLogSynced = true;
+			sendTransferLogSummary();
+		}
+	}
+	else if (!getCoopStatic())
+	{
+		_transferLogSynced = false;
+	}
 
 	if (connectionTCP::saveError == true)
 	{
@@ -2201,6 +2447,11 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 
 	}
 
+	if (stateString == "transferLog")
+	{
+		reconcileTransferLog(obj);
+	}
+
 	if (stateString == "transferSoldier")
 	{
 
@@ -2337,15 +2588,36 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 						{
 
 						// Ignore duplicate deliveries via the sender's unique
-						// packet id. (Roster comparisons are unreliable: two
-						// fresh saves both number soldiers from 1 and can even
-						// roll identical names.)
+						// packet id, checked against the PERSISTED receipts:
+						// they roll back together with the save, so a resend
+						// after a rollback is correctly treated as new. (An
+						// in-memory set would survive load_save and block it;
+						// roster comparisons are unreliable because two fresh
+						// saves both number soldiers from 1 and can even roll
+						// identical names.)
 						long long xferId = obj.get("xfer_id", 0).asInt64();
-						bool exists = (xferId != 0 && _seenTransferPacketIds.count(xferId) != 0);
+						bool exists = false;
 
 						if (xferId != 0)
 						{
-							_seenTransferPacketIds.insert(xferId);
+
+							Json::CharReaderBuilder rrb;
+							std::unique_ptr<Json::CharReader> rreader(rrb.newCharReader());
+
+							for (auto& line : coopTransferLog)
+							{
+
+								Json::Value r;
+								std::string errs2;
+
+								if (rreader->parse(line.data(), line.data() + line.size(), &r, &errs2) && r["d"].asString() == "r" && r["x"].asInt64() == xferId)
+								{
+									exists = true;
+									break;
+								}
+
+							}
+
 						}
 
 						Log(LOG_INFO) << "[coop-transfer] RECV type=" << type << " exists=" << (exists ? 1 : 0)
@@ -2415,6 +2687,20 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 							Log(LOG_INFO) << "[coop-transfer] RECV added soldier '" << soldier->getName()
 							              << "' id=" << soldier->getId() << " to base '" << targetBase->getName()
 							              << "' coopBase=" << soldier->getCoopBase();
+
+							// Received receipt - persisted in our save so a
+							// reconnect can detect rolled-back peers. sid is
+							// the SENDER's original soldier id (not our
+							// possibly re-assigned one): the giver uses it to
+							// find their stale copy in Case 1.
+							{
+								Json::Value receipt;
+								receipt["x"] = obj["xfer_id"];
+								receipt["d"] = "r";
+								receipt["sid"] = soldier_id;
+								receipt["n"] = soldier->getName();
+								appendTransferReceipt(receipt);
+							}
 
 							// Tell the new owner (skip if the deferred path
 							// already notified during a base visit). The

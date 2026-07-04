@@ -798,6 +798,34 @@ std::string TestServer::execute(const std::string& line)
 				}
 			}
 		}
+		else if (cmd == "save_game")
+		{
+			std::string file = req.get("file", "").asString();
+			if (file.empty() || !_game->getSavedGame())
+			{
+				resp["error"] = "need file + loaded save";
+			}
+			else
+			{
+				_game->getSavedGame()->save(file, _game->getMod());
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "sync_transfer_log")
+		{
+			coop->sendTransferLogSummary();
+			resp["ok"] = true;
+		}
+		else if (cmd == "get_transfer_log")
+		{
+			Json::Value entries(Json::arrayValue);
+			for (auto& line : connectionTCP::coopTransferLog)
+			{
+				entries.append(line);
+			}
+			resp["entries"] = entries;
+			resp["ok"] = true;
+		}
 		else if (cmd == "set_option")
 		{
 			std::string name = req.get("name", "").asString();

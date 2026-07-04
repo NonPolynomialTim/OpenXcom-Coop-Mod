@@ -505,17 +505,32 @@ class connectionTCP
 	// the sweep in processPendingSoldierTransfers() parks exactly those (and
 	// nothing else - legacy saves carry unrelated ownerPlayerId values).
 	std::unordered_set<int> _transferredAwaySoldierIds;
-	// Duplicate-delivery guard for transferSoldier packets. Roster-based
-	// checks are unreliable: two fresh saves both number soldiers from 1 and
-	// can even roll identical names, so an incoming soldier can look like an
-	// existing local one. Sender stamps each packet with a unique id instead.
+	// Counter feeding the unique per-packet transfer id (duplicate-delivery
+	// detection itself runs against the persisted receipts in
+	// coopTransferLog, so it rolls back together with the save).
 	int _transferSendCounter = 0;
-	std::unordered_set<long long> _seenTransferPacketIds;
 	// Incoming physical transfers received while our SavedGame is swapped out
 	// (viewing the peer's base, playerInsideCoopBase). Applying them then
 	// would mutate the temporary peer world and be discarded on exit - the
 	// soldier would vanish on both machines. Replayed once our world is back.
 	std::vector<Json::Value> _pendingIncomingTransfers;
+	// One-shot flag: the transfer-receipt summary has been sent to the peer
+	// for the current session (reset when the connection drops).
+	bool _transferLogSynced = false;
+
+  public:
+	// Durable transfer receipts, persisted inside the .sav (real save/load
+	// only - NOT the basehost memory blobs). Each entry is a one-line JSON:
+	// sent:  {"x":id,"d":"s","sid":soldierId,"n":name,"o":owner,"b":station,"y":yaml}
+	// recv:  {"x":id,"d":"r","sid":soldierId,"n":name}
+	// Rolling a save back rolls its receipts back too; on reconnect the two
+	// logs are exchanged and divergence is healed (stale giver re-removes the
+	// duplicated soldier, stale receiver gets the packet resent). See
+	// reconcileTransferLog().
+	static std::vector<std::string> coopTransferLog;
+	void appendTransferReceipt(const Json::Value& receipt);
+	void sendTransferLogSummary();
+	void reconcileTransferLog(const Json::Value& obj);
 };
 
 }
