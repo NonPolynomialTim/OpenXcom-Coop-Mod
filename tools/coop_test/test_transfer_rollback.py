@@ -1,9 +1,16 @@
-"""Autonomous test: save-rollback semantics for soldier transfers.
+"""Autonomous test: host save = single source of truth for soldier transfers.
 
-Spec: a save rollback UNDOES the trade on both sides - the giver keeps or
-regains the soldier, the receiver's copy is revoked. Tested in BOTH transfer
-directions (host->client and client->host), plus the stacked-notice font fix
-(3 notices in a row over the geoscape must all use geoscape popup colors).
+Exact user repro:
+  1. new game, host + client connected
+  2. host transfers unit A to client
+  3. host saves game
+  4. host transfers unit B to client
+  5. host abandons (in-session: statics survive, like returning to main menu)
+  6. host loads the save, client re-fetches its world from the host
+  7. EXPECTED: host has B (not A), client has A (not B), no bogus notices
+
+Also runs the reverse direction (client gives, host's save still authority)
+and the stacked-notice color check.
 
 Run:  python tools/coop_test/test_transfer_rollback.py
 """
@@ -28,70 +35,77 @@ def soldier_count(gc, name, owner=None):
 
 
 def dismiss_all_notices(gc):
-    while True:
-        r = gc.cmd({"cmd": "dismiss_notice"})
-        if not r.get("ok"):
-            return
+    while gc.cmd({"cmd": "dismiss_notice"}).get("ok"):
+        pass
 
 
-def run_direction(giver, receiver, receiver_owner_id, tag):
-    """Both rollback cases for one transfer direction."""
-    # Fresh saves can roll IDENTICAL rosters (same RNG seed), so give the
-    # test subject a globally unique name for unambiguous counting.
-    soldier = f"XferTest {tag}"
-    original = own_base(giver)["soldiers"][0]["name"]
-    giver.ok({"cmd": "rename_soldier", "name": original, "newName": soldier})
+def no_notices(gc):
+    return not any("TransferNoticeState" in s for s in gc.cmd({"cmd": "get_state"})["states"])
 
-    giver.ok({"cmd": "save_game", "file": f"{tag}_giver_pre.sav"})
-    receiver.ok({"cmd": "save_game", "file": f"{tag}_recv_pre.sav"})
 
-    # ---- transfer ----
-    giver.ok({"cmd": "transfer", "name": soldier, "owner": receiver_owner_id})
-    receiver.wait_for("transfer applied",
-                      lambda: (soldier_count(receiver, soldier, owner=receiver_owner_id) == 1) or None, timeout=30)
+def wait_blob_fresh(host, client):
+    """Wait until the host holds the client's pushed world blob."""
+    save_id = client.cmd({"cmd": "get_coop"})["saveID"]
+    key = f"host_{save_id}_ClientPlayer.data"
+    host.wait_for(f"client blob {key} on host",
+                  lambda: host.cmd({"cmd": "has_coop_file", "key": key}).get("present") or None,
+                  timeout=30)
+    time.sleep(3)  # existence check can't tell a fresh push from an old one
+
+
+def transfer_and_wait(giver, receiver, name, receiver_owner_id):
+    giver.ok({"cmd": "transfer", "name": name, "owner": receiver_owner_id})
+    receiver.wait_for(f"{name} arrives",
+                      lambda: (soldier_count(receiver, name, owner=receiver_owner_id) == 1) or None, timeout=30)
     dismiss_all_notices(receiver)
-    assert soldier_count(giver, soldier) == 0
 
-    # ==== CASE 1: giver rolls back -> trade undone, receiver copy revoked ====
-    giver.ok({"cmd": "load_save", "file": f"{tag}_giver_pre.sav"})
-    assert soldier_count(giver, soldier) == 1
 
-    receiver.ok({"cmd": "sync_transfer_log"})  # receiver announces its receipts
+def run_repro(host, client, giver, receiver, receiver_owner_id, tag):
+    # unique names (fresh saves can roll identical rosters)
+    roster = own_base(giver)["soldiers"]
+    unit_a, unit_b = f"Unit A {tag}", f"Unit B {tag}"
+    giver.ok({"cmd": "rename_soldier", "name": roster[0]["name"], "newName": unit_a})
+    giver.ok({"cmd": "rename_soldier", "name": roster[1]["name"], "newName": unit_b})
 
-    receiver.wait_for(f"{tag} case1: receiver copy revoked",
-                      lambda: (soldier_count(receiver, soldier, owner=receiver_owner_id) == 0) or None, timeout=30)
-    assert soldier_count(giver, soldier) == 1, "giver must keep the resurrected soldier"
-    dismiss_all_notices(receiver)
-    print(f"PASS {tag} case1: giver rollback undoes trade (giver keeps, receiver revoked)")
+    # 2. transfer A
+    transfer_and_wait(giver, receiver, unit_a, receiver_owner_id)
+    wait_blob_fresh(host, client)
 
-    # ---- transfer again for case 2 ----
-    giver.ok({"cmd": "transfer", "name": soldier, "owner": receiver_owner_id})
-    receiver.wait_for("re-transfer applied",
-                      lambda: (soldier_count(receiver, soldier, owner=receiver_owner_id) == 1) or None, timeout=30)
-    dismiss_all_notices(receiver)
-    giver.ok({"cmd": "save_game", "file": f"{tag}_giver_post.sav"})  # giver saved AFTER
+    # 3. HOST saves (the authority snapshot: A traded, B not)
+    host.ok({"cmd": "save_game", "file": f"authority_{tag}.sav"})
 
-    # ==== CASE 2: receiver rolls back -> trade undone, giver restored ====
-    receiver.ok({"cmd": "load_save", "file": f"{tag}_recv_pre.sav"})
-    assert soldier_count(receiver, soldier, owner=receiver_owner_id) == 0
+    # 4. transfer B
+    transfer_and_wait(giver, receiver, unit_b, receiver_owner_id)
+    wait_blob_fresh(host, client)
 
-    receiver.ok({"cmd": "sync_transfer_log"})  # receiver announces (no receipts)
+    # 5+6. host "abandons" and loads the save; client re-fetches its world
+    host.ok({"cmd": "load_save", "file": f"authority_{tag}.sav"})
+    client.ok({"cmd": "client_reload_progress"})
 
-    giver.wait_for(f"{tag} case2: soldier restored to giver",
-                   lambda: (soldier_count(giver, soldier) == 1) or None, timeout=30)
-    assert soldier_count(receiver, soldier, owner=receiver_owner_id) == 0
-    dismiss_all_notices(giver)
-    print(f"PASS {tag} case2: receiver rollback undoes trade (soldier restored to giver)")
+    if receiver is client:
+        # client should end with A (traded pre-save) and without B
+        expected = lambda: (soldier_count(client, unit_a, owner=receiver_owner_id) == 1
+                            and soldier_count(client, unit_b, owner=receiver_owner_id) == 0) or None
+    else:
+        # client was the giver: A gone (given pre-save), B back (post-save trade rolled back)
+        expected = lambda: (soldier_count(client, unit_a) == 0
+                            and soldier_count(client, unit_b) == 1) or None
+    client.wait_for("client world reloaded from host save", expected, timeout=90)
+
+    # 7. assertions: the save is the authority
+    assert soldier_count(giver, unit_a) == 0, f"{tag}: giver must NOT have {unit_a} (traded before save)"
+    assert soldier_count(giver, unit_b) == 1, f"{tag}: giver must have {unit_b} (trade B was after the save)"
+    assert soldier_count(receiver, unit_a, owner=receiver_owner_id) == 1, f"{tag}: receiver must have {unit_a}"
+    assert soldier_count(receiver, unit_b, owner=receiver_owner_id) == 0, f"{tag}: receiver must NOT have {unit_b}"
+    assert no_notices(host) and no_notices(client), f"{tag}: no bogus 'returned' notices allowed"
+    print(f"PASS {tag}: save is authority - A stays traded, B rolled back, no notices")
 
 
 def test_stacked_notices(gc):
-    """3 notices in a row over the geoscape: every one must use geoscape
-    popup colors, not just the first."""
     for i in range(3):
         gc.ok({"cmd": "show_notice", "message": f"stacked notice {i + 1}"})
     cats = gc.ok({"cmd": "get_notices"})["categories"]
-    assert len(cats) == 3, f"expected 3 notices, got {cats}"
-    assert all(c == "geoManufactureComplete" for c in cats), f"wrong categories: {cats}"
+    assert cats == ["geoManufactureComplete"] * 3, f"wrong categories: {cats}"
     for _ in range(3):
         gc.ok({"cmd": "dismiss_notice"})
     print("PASS stacked notices: all 3 use geoscape popup colors")
@@ -107,8 +121,8 @@ def main():
 
         test_stacked_notices(host)
 
-        run_direction(host, client, receiver_owner_id=1, tag="h2c")
-        run_direction(client, host, receiver_owner_id=0, tag="c2h")
+        run_repro(host, client, giver=host, receiver=client, receiver_owner_id=1, tag="h2c")
+        run_repro(host, client, giver=client, receiver=host, receiver_owner_id=0, tag="c2h")
 
         print("TEST PASSED")
     finally:

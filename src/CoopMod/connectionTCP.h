@@ -505,36 +505,27 @@ class connectionTCP
 	// the sweep in processPendingSoldierTransfers() parks exactly those (and
 	// nothing else - legacy saves carry unrelated ownerPlayerId values).
 	std::unordered_set<int> _transferredAwaySoldierIds;
-	// Counter feeding the unique per-packet transfer id (duplicate-delivery
-	// detection itself runs against the persisted receipts in
-	// coopTransferLog, so it rolls back together with the save).
+	// Counter feeding the unique per-packet transfer id, plus the in-memory
+	// duplicate-delivery guard (sufficient now: the host's save is the single
+	// authority, so packets are never re-sent across sessions).
 	int _transferSendCounter = 0;
+	std::unordered_set<long long> _seenTransferPacketIds;
 	// Incoming physical transfers received while our SavedGame is swapped out
 	// (viewing the peer's base, playerInsideCoopBase). Applying them then
 	// would mutate the temporary peer world and be discarded on exit - the
 	// soldier would vanish on both machines. Replayed once our world is back.
 	std::vector<Json::Value> _pendingIncomingTransfers;
-	// One-shot flag: the transfer-receipt summary has been sent to the peer
-	// for the current session (reset when the connection drops).
-	bool _transferLogSynced = false;
-
   public:
-	// Durable transfer receipts, persisted inside the .sav (real save/load
-	// only - NOT the basehost memory blobs). Each entry is a one-line JSON:
-	// sent:  {"x":id,"d":"s","sid":soldierId,"n":name,"o":owner,"b":station,"y":yaml}
-	// recv:  {"x":id,"d":"r","sid":soldierId,"n":name}
-	// Rolling a save back rolls its receipts back too; on reconnect the two
-	// logs are exchanged and divergence is healed (stale giver re-removes the
-	// duplicated soldier, stale receiver gets the packet resent). See
-	// reconcileTransferLog().
-	static std::vector<std::string> coopTransferLog;
-	void appendTransferReceipt(const Json::Value& receipt);
-	void sendTransferLogSummary();
-	void reconcileTransferLog(const Json::Value& obj);
-	void eraseReceiptByXfer(long long xferId, const std::string& dir);
-	// Re-instantiates a soldier from a sent-receipt's YAML into this save
-	// (rollback undo: the giver gets the soldier back).
-	void restoreSoldierFromReceipt(const Json::Value& receipt, int ownerId);
+	// Single-authority model: the HOST's .sav embeds the latest client-world
+	// blob (see SavedGame::save/load), so loading a host save atomically
+	// restores BOTH players' rosters; the client re-fetches its world from
+	// the host on reconnect. To keep the embedded blob fresh, the client
+	// silently pushes its progress to the host after every soldier transfer.
+	void pushProgressToHostSilently();
+	// Clears session transfer state (pending queues, dedup ids, away-ids)
+	// after a save load - stale in-memory state must never outlive the save
+	// that is now the authority.
+	void resetTransferSessionState();
 };
 
 }

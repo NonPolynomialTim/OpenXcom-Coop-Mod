@@ -307,6 +307,7 @@ std::string TestServer::execute(const std::string& line)
 			resp["hostName"] = coop->getHostName();
 			resp["clientName"] = coop->getCurrentClientName();
 			resp["insideCoopBase"] = coop->playerInsideCoopBase;
+			resp["saveID"] = Json::Value::Int64(connectionTCP::saveID);
 			resp["ok"] = true;
 		}
 		else if (cmd == "load_save")
@@ -314,6 +315,7 @@ std::string TestServer::execute(const std::string& line)
 			std::string file = req.get("file", "").asString();
 			SavedGame* s = new SavedGame();
 			s->load(file, _game->getMod(), _game->getLanguage());
+			coop->resetTransferSessionState();
 			_game->setSavedGame(s);
 			_game->setState(new GeoscapeState);
 			resp["ok"] = true;
@@ -859,19 +861,30 @@ std::string TestServer::execute(const std::string& line)
 				resp["ok"] = true;
 			}
 		}
-		else if (cmd == "sync_transfer_log")
+		else if (cmd == "client_reload_progress")
 		{
-			coop->sendTransferLogSummary();
-			resp["ok"] = true;
-		}
-		else if (cmd == "get_transfer_log")
-		{
-			Json::Value entries(Json::arrayValue);
-			for (auto& line : connectionTCP::coopTransferLog)
+			// Reconnect flow: ask the host for our world (same as the client
+			// branch of Profile::buttonOK).
+			if (connectionTCP::getServerOwner())
 			{
-				entries.append(line);
+				resp["error"] = "host cannot reload progress";
 			}
-			resp["entries"] = entries;
+			else if (connectionTCP::saveID == 0)
+			{
+				resp["error"] = "no saveID";
+			}
+			else
+			{
+				Json::Value root;
+				root["state"] = "request_load_progress";
+				coop->sendTCPPacketData(root.toStyledString());
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "has_coop_file")
+		{
+			std::string key = req.get("key", "").asString();
+			resp["present"] = connectionTCP::hasCoopFile(key);
 			resp["ok"] = true;
 		}
 		else if (cmd == "set_option")
