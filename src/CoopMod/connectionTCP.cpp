@@ -621,6 +621,68 @@ void connectionTCP::loopData()
 	}
 }
 
+void connectionTCP::transferSoldierOwnership(Soldier* soldier, int newOwnerId, bool broadcast)
+{
+
+	if (!soldier)
+	{
+		return;
+	}
+
+	// Permanent, unconditional ownership change (soldiers can be traded back
+	// and forth, unlike the legacy one-way "giveUnit" battle loan).
+	soldier->setOwnerPlayerId(newOwnerId);
+	soldier->setCoop(newOwnerId);
+
+	// If a battle is running and the soldier is deployed, hand over live
+	// control as well.
+	int unit_id = -1;
+
+	if (_game->getSavedGame() && _game->getSavedGame()->getSavedBattle())
+	{
+
+		auto* battle = _game->getSavedGame()->getSavedBattle();
+
+		for (auto& unit : *battle->getUnits())
+		{
+
+			if (unit->getGeoscapeSoldier() == soldier)
+			{
+
+				unit->setCoop(newOwnerId);
+				unit_id = unit->getId();
+
+				// The unit is no longer ours: move the selection along.
+				int localPlayerId = getHost() ? 0 : 1;
+
+				if (battle->getSelectedUnit() == unit && newOwnerId != localPlayerId)
+				{
+					battle->selectNextPlayerUnit();
+				}
+
+				break;
+
+			}
+
+		}
+
+	}
+
+	if (broadcast)
+	{
+
+		Json::Value obj;
+		obj["state"] = "transferSoldier";
+		obj["soldier_id"] = soldier->getId();
+		obj["owner"] = newOwnerId;
+		obj["unit_id"] = unit_id;
+
+		sendTCPPacketData(obj.toStyledString());
+
+	}
+
+}
+
 void connectionTCP::clearAllReceivedTCPPackets()
 {
 
@@ -1897,6 +1959,90 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 						}
 
 						unit->setCoop(coop);
+
+						break;
+
+					}
+
+				}
+
+			}
+
+		}
+
+	}
+
+	if (stateString == "transferSoldier")
+	{
+
+		if (_game->getSavedGame())
+		{
+
+			int soldier_id = obj["soldier_id"].asInt();
+			int owner = obj["owner"].asInt();
+			int unit_id = obj["unit_id"].asInt();
+
+			// Geoscape soldier (search every base, including mirrored co-op bases).
+			bool found = false;
+
+			for (auto& base : *_game->getSavedGame()->getBases())
+			{
+
+				for (auto& soldier : *base->getSoldiers())
+				{
+
+					if (soldier->getId() == soldier_id)
+					{
+
+						soldier->setOwnerPlayerId(owner);
+						soldier->setCoop(owner);
+						found = true;
+						break;
+
+					}
+
+				}
+
+				if (found)
+				{
+					break;
+				}
+
+			}
+
+			// Live battlescape unit, matched by unit id or by its geoscape soldier.
+			if (_game->getSavedGame()->getSavedBattle())
+			{
+
+				auto* battle = _game->getSavedGame()->getSavedBattle();
+
+				for (auto& unit : *battle->getUnits())
+				{
+
+					bool match = (unit_id != -1 && unit->getId() == unit_id);
+
+					if (!match && unit->getGeoscapeSoldier() && unit->getGeoscapeSoldier()->getId() == soldier_id)
+					{
+						match = true;
+					}
+
+					if (match)
+					{
+
+						unit->setCoop(owner);
+
+						if (unit->getGeoscapeSoldier())
+						{
+							unit->getGeoscapeSoldier()->setOwnerPlayerId(owner);
+							unit->getGeoscapeSoldier()->setCoop(owner);
+						}
+
+						int localPlayerId = getHost() ? 0 : 1;
+
+						if (battle->getSelectedUnit() == unit && owner != localPlayerId)
+						{
+							battle->selectNextPlayerUnit();
+						}
 
 						break;
 
