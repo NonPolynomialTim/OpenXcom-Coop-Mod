@@ -896,6 +896,13 @@ void GeoscapeState::init()
 
 	}
 
+	// coop: complete queued in-battle soldier transfers before the cleanup
+	// below deletes other-player soldiers (the queue still references them).
+	if (_game->getCoopMod()->coopMissionEnd == true)
+	{
+		_game->getCoopMod()->processPendingSoldierTransfers();
+	}
+
 	// HOST AFTER THE BATTLE
 	// Make sure the other player's units aren't saved in single-player mode.
 	if ((_game->getCoopMod()->getHost() == true || _game->getCoopMod()->getCoopStatic() == false) && _game->getCoopMod()->coopMissionEnd == true)
