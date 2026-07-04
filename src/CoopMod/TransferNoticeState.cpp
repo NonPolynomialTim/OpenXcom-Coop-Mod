@@ -25,6 +25,7 @@
 #include "../Interface/Text.h"
 #include "../Interface/TextButton.h"
 #include "../Interface/Window.h"
+#include "../Geoscape/GeoscapeState.h"
 #include "../Mod/Mod.h"
 #include "../Mod/RuleInterface.h"
 
@@ -41,17 +42,27 @@ TransferNoticeState::TransferNoticeState(const std::string &message)
 
 	// Adopt the palette of whatever screen we're over - no palette swap, no
 	// flicker, works on geoscape, basescape and the peer-base view alike.
+	// Color indices come from an interface designed for that palette, or the
+	// text is illegible (sackSoldier's dark-blue text over PAL_GEOSCAPE).
+	std::string category = "sackSoldier";
+	std::string textElement = "text";
 	if (!_game->getStates().empty())
 	{
-		setStatePalette(_game->getStates().back()->getPalette());
+		State* top = _game->getStates().back();
+		setStatePalette(top->getPalette());
+		if (dynamic_cast<GeoscapeState*>(top))
+		{
+			category = "geoManufactureComplete"; // standard geoscape popup colors
+			textElement = "text1";
+		}
 	}
 
-	add(_window, "window", "sackSoldier");
-	add(_txtMessage, "text", "sackSoldier");
-	add(_btnOk, "button", "sackSoldier");
+	add(_window, "window", category);
+	add(_txtMessage, textElement, category);
+	add(_btnOk, "button", category);
 
 	centerAllSurfaces();
-	setWindowBackground(_window, "sackSoldier");
+	setWindowBackground(_window, category);
 
 	_txtMessage->setAlign(ALIGN_CENTER);
 	_txtMessage->setWordWrap(true);

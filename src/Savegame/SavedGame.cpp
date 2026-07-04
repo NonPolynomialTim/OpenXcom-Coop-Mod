@@ -767,6 +767,8 @@ void SavedGame::load(const std::string &filename, Mod *mod, Language *lang)
 	reader.tryRead("saveID", connectionTCP::saveID);
 	reader.tryRead("coop_gamemode", connectionTCP::_coopGamemode);
 	reader.tryRead("coop_save_owner_player_id", connectionTCP::coop_save_owner_player_id);
+	connectionTCP::coopTransferLog.clear();
+	reader.tryRead("coopTransferLog", connectionTCP::coopTransferLog);
 	if (connectionTCP::isCoopBaseLoading == false && connectionTCP::getServerOwner() == false)
 	{
 		reader.tryRead("no_bases", connectionTCP::no_bases);
@@ -1416,6 +1418,7 @@ void SavedGame::save(const std::string &filename, Mod *mod) const
 	writer.write("coop_gamemode", connectionTCP::_coopGamemode);
 	writer.write("coop_save_owner_player_id", connectionTCP::coop_save_owner_player_id);
 	writer.write("no_bases", connectionTCP::no_bases);
+	writer.write("coopTransferLog", connectionTCP::coopTransferLog);
 
 	writer.write("monthsPassed", _monthsPassed);
 	writer.write("daysPassed", _daysPassed);
