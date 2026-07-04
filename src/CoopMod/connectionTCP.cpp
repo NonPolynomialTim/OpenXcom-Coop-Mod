@@ -54,6 +54,11 @@
 #include "ModCheckMenu.h"
 #include "connectionUDP/connection_udp_glue.h"
 
+#include "../Engine/Yaml.h"
+#include "../Mod/Mod.h"
+#include "../Savegame/Base.h"
+#include "../Savegame/Soldier.h"
+
 namespace OpenXcom
 {
 
@@ -624,7 +629,7 @@ void connectionTCP::loopData()
 void connectionTCP::transferSoldierOwnership(Soldier* soldier, int newOwnerId, bool broadcast)
 {
 
-	if (!soldier)
+	if (!soldier || !_game->getSavedGame())
 	{
 		return;
 	}
@@ -634,13 +639,14 @@ void connectionTCP::transferSoldierOwnership(Soldier* soldier, int newOwnerId, b
 	soldier->setOwnerPlayerId(newOwnerId);
 	soldier->setCoop(newOwnerId);
 
-	// If a battle is running and the soldier is deployed, hand over live
-	// control as well.
-	int unit_id = -1;
+	int localPlayerId = getHost() ? 0 : 1;
 
-	if (_game->getSavedGame() && _game->getSavedGame()->getSavedBattle())
+	if (_game->getSavedGame()->getSavedBattle())
 	{
 
+		// Battle running: flip live control now, move the soldier between the
+		// base rosters only after the mission ends (the BattleUnit and the
+		// debriefing still reference this Soldier).
 		auto* battle = _game->getSavedGame()->getSavedBattle();
 
 		for (auto& unit : *battle->getUnits())
@@ -650,14 +656,26 @@ void connectionTCP::transferSoldierOwnership(Soldier* soldier, int newOwnerId, b
 			{
 
 				unit->setCoop(newOwnerId);
-				unit_id = unit->getId();
 
 				// The unit is no longer ours: move the selection along.
-				int localPlayerId = getHost() ? 0 : 1;
-
 				if (battle->getSelectedUnit() == unit && newOwnerId != localPlayerId)
 				{
 					battle->selectNextPlayerUnit();
+				}
+
+				if (broadcast)
+				{
+
+					// Control flip for the peer's battle. The physical move
+					// follows from processPendingSoldierTransfers().
+					Json::Value obj;
+					obj["state"] = "transferSoldier";
+					obj["soldier_id"] = soldier->getId();
+					obj["owner"] = newOwnerId;
+					obj["unit_id"] = unit->getId();
+
+					sendTCPPacketData(obj.toStyledString());
+
 				}
 
 				break;
@@ -666,18 +684,104 @@ void connectionTCP::transferSoldierOwnership(Soldier* soldier, int newOwnerId, b
 
 		}
 
-	}
+		if (broadcast && newOwnerId != localPlayerId)
+		{
+			_pendingSoldierTransfers.push_back(std::make_pair(soldier, newOwnerId));
+		}
 
-	if (broadcast)
+	}
+	else if (broadcast && newOwnerId != localPlayerId)
 	{
 
-		Json::Value obj;
-		obj["state"] = "transferSoldier";
-		obj["soldier_id"] = soldier->getId();
-		obj["owner"] = newOwnerId;
-		obj["unit_id"] = unit_id;
+		// No battle: move the soldier out of our world immediately.
+		sendSoldierTransferPacket(soldier, newOwnerId);
+		removeSoldierFromLocalBases(soldier);
+		_transferredSoldiers.push_back(soldier);
 
-		sendTCPPacketData(obj.toStyledString());
+	}
+
+}
+
+void connectionTCP::processPendingSoldierTransfers()
+{
+
+	if (_pendingSoldierTransfers.empty())
+	{
+		return;
+	}
+
+	if (_game->getSavedGame() && _game->getSavedGame()->getSavedBattle())
+	{
+		// Still in battle; try again later.
+		return;
+	}
+
+	for (auto& pending : _pendingSoldierTransfers)
+	{
+
+		Soldier* soldier = pending.first;
+		int newOwnerId = pending.second;
+
+		// Died during the mission: stays in the giver's memorial.
+		if (soldier->getDeath())
+		{
+			continue;
+		}
+
+		sendSoldierTransferPacket(soldier, newOwnerId);
+		removeSoldierFromLocalBases(soldier);
+		_transferredSoldiers.push_back(soldier);
+
+	}
+
+	_pendingSoldierTransfers.clear();
+
+}
+
+void connectionTCP::sendSoldierTransferPacket(Soldier* soldier, int newOwnerId)
+{
+
+	// Detach from any craft first so the serialized soldier does not carry a
+	// craft reference that would be resolved against the receiver's save.
+	soldier->setCraft(0);
+
+	YAML::YamlRootNodeWriter writer;
+	writer.setAsMap();
+	soldier->save(writer["soldier"], _game->getMod()->getScriptGlobal());
+
+	Json::Value obj;
+	obj["state"] = "transferSoldier";
+	obj["soldier_id"] = soldier->getId();
+	obj["owner"] = newOwnerId;
+	obj["unit_id"] = -1;
+	obj["soldier_yaml"] = writer.emit().yaml;
+
+	sendTCPPacketData(obj.toStyledString());
+
+}
+
+void connectionTCP::removeSoldierFromLocalBases(Soldier* soldier)
+{
+
+	if (!_game->getSavedGame())
+	{
+		return;
+	}
+
+	for (auto& base : *_game->getSavedGame()->getBases())
+	{
+
+		auto eraseFrom = [soldier](std::vector<Soldier*>& list)
+		{
+			list.erase(std::remove(list.begin(), list.end(), soldier), list.end());
+		};
+
+		eraseFrom(*base->getSoldiers());
+		// SoldiersState/CraftSoldiersState swap the roster while open and
+		// restore it from these snapshots afterwards - purge them too so the
+		// soldier cannot resurrect on the giver's side.
+		eraseFrom(base->base_oldsoldiers);
+		eraseFrom(base->base_oldsoldiers2);
 
 	}
 
@@ -700,6 +804,11 @@ void connectionTCP::createLoopdataThread()
 // an endless loop that processes the sync-packet data: battlescape, tasks, remove targets, research, trading, disconnect, errors.
 void connectionTCP::updateCoopTask()
 {
+
+	// coop: finish queued in-battle soldier transfers as soon as no battle is
+	// active (fallback for the client, which may not run the host's
+	// coopMissionEnd path in GeoscapeState).
+	processPendingSoldierTransfers();
 
 	if (connectionTCP::saveError == true)
 	{
@@ -1982,69 +2091,168 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 			int owner = obj["owner"].asInt();
 			int unit_id = obj["unit_id"].asInt();
 
-			// Geoscape soldier (search every base, including mirrored co-op bases).
-			bool found = false;
-
-			for (auto& base : *_game->getSavedGame()->getBases())
+			if (obj.isMember("soldier_yaml"))
 			{
 
-				for (auto& soldier : *base->getSoldiers())
+				// Physical transfer: the peer removed the soldier from their
+				// world; instantiate it into our first own (non-mirror) base.
+				try
 				{
 
-					if (soldier->getId() == soldier_id)
+					YAML::YamlRootNodeReader reader(YAML::YamlString{obj["soldier_yaml"].asString()}, "transferSoldier");
+					auto soldierReader = reader["soldier"];
+
+					std::string type = soldierReader["type"].readVal(_game->getMod()->getSoldiersList().front());
+
+					if (_game->getMod()->getSoldier(type))
 					{
 
-						soldier->setOwnerPlayerId(owner);
-						soldier->setCoop(owner);
-						found = true;
-						break;
+						// Ignore duplicates (e.g. a resent packet).
+						bool exists = false;
 
+						for (auto& base : *_game->getSavedGame()->getBases())
+						{
+							for (auto& s : *base->getSoldiers())
+							{
+								if (s->getId() == soldier_id && s->getName() == soldierReader["name"].readVal(std::string()))
+								{
+									exists = true;
+									break;
+								}
+							}
+							if (exists)
+							{
+								break;
+							}
+						}
+
+						Base* targetBase = 0;
+
+						for (auto& base : *_game->getSavedGame()->getBases())
+						{
+							if (base->_coopBase == false && base->_coopIcon == false)
+							{
+								targetBase = base;
+								break;
+							}
+						}
+
+						if (!exists && targetBase)
+						{
+
+							Soldier* soldier = new Soldier(_game->getMod()->getSoldier(type), 0, 0 /*nationality*/);
+							soldier->load(soldierReader, _game->getMod(), _game->getSavedGame(), _game->getMod()->getScriptGlobal());
+
+							// The peer's soldier ids and ours come from separate
+							// saves: on collision give the incoming soldier a
+							// fresh id so lookups stay unambiguous.
+							int maxId = soldier->getId();
+
+							bool collision = false;
+
+							for (auto& base : *_game->getSavedGame()->getBases())
+							{
+								for (auto& s : *base->getSoldiers())
+								{
+									if (s->getId() == soldier->getId())
+									{
+										collision = true;
+									}
+									maxId = std::max(maxId, s->getId());
+								}
+							}
+
+							for (auto& s : *_game->getSavedGame()->getDeadSoldiers())
+							{
+								if (s->getId() == soldier->getId())
+								{
+									collision = true;
+								}
+								maxId = std::max(maxId, s->getId());
+							}
+
+							if (collision)
+							{
+								soldier->setId(maxId + 1);
+							}
+
+							soldier->setCraft(0);
+							soldier->setCoopBase(-1);
+							soldier->setOwnerPlayerId(owner);
+							soldier->setCoop(owner);
+
+							targetBase->getSoldiers()->push_back(soldier);
+
+							// SoldiersState/CraftSoldiersState restore the
+							// roster from these snapshots when they close; if
+							// one is open right now (snapshot non-empty), add
+							// the soldier there too or the restore drops it.
+							if (!targetBase->base_oldsoldiers.empty())
+							{
+								targetBase->base_oldsoldiers.push_back(soldier);
+							}
+							if (!targetBase->base_oldsoldiers2.empty())
+							{
+								targetBase->base_oldsoldiers2.push_back(soldier);
+							}
+
+						}
+
+					}
+					else
+					{
+						DebugLog("transferSoldier: unknown soldier type " + type + "\n");
 					}
 
 				}
-
-				if (found)
+				catch (const std::exception& e)
 				{
-					break;
+					DebugLog(std::string("transferSoldier: failed to load soldier yaml: ") + e.what() + "\n");
 				}
 
 			}
-
-			// Live battlescape unit, matched by unit id or by its geoscape soldier.
-			if (_game->getSavedGame()->getSavedBattle())
+			else
 			{
 
-				auto* battle = _game->getSavedGame()->getSavedBattle();
-
-				for (auto& unit : *battle->getUnits())
+				// Control flip for a soldier deployed in the current battle.
+				// The physical move arrives in a later packet once the peer's
+				// mission has ended.
+				if (_game->getSavedGame()->getSavedBattle())
 				{
 
-					bool match = (unit_id != -1 && unit->getId() == unit_id);
+					auto* battle = _game->getSavedGame()->getSavedBattle();
 
-					if (!match && unit->getGeoscapeSoldier() && unit->getGeoscapeSoldier()->getId() == soldier_id)
-					{
-						match = true;
-					}
-
-					if (match)
+					for (auto& unit : *battle->getUnits())
 					{
 
-						unit->setCoop(owner);
+						bool match = (unit_id != -1 && unit->getId() == unit_id);
 
-						if (unit->getGeoscapeSoldier())
+						if (!match && unit->getGeoscapeSoldier() && unit->getGeoscapeSoldier()->getId() == soldier_id)
 						{
-							unit->getGeoscapeSoldier()->setOwnerPlayerId(owner);
-							unit->getGeoscapeSoldier()->setCoop(owner);
+							match = true;
 						}
 
-						int localPlayerId = getHost() ? 0 : 1;
-
-						if (battle->getSelectedUnit() == unit && owner != localPlayerId)
+						if (match)
 						{
-							battle->selectNextPlayerUnit();
-						}
 
-						break;
+							unit->setCoop(owner);
+
+							if (unit->getGeoscapeSoldier())
+							{
+								unit->getGeoscapeSoldier()->setOwnerPlayerId(owner);
+								unit->getGeoscapeSoldier()->setCoop(owner);
+							}
+
+							int localPlayerId = getHost() ? 0 : 1;
+
+							if (battle->getSelectedUnit() == unit && owner != localPlayerId)
+							{
+								battle->selectNextPlayerUnit();
+							}
+
+							break;
+
+						}
 
 					}
 

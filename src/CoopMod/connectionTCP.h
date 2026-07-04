@@ -473,11 +473,30 @@ class connectionTCP
 	static bool canRemoveManuallyAddedServer;
 
 	// Permanently transfers a soldier to another player (0 = host, 1 = client).
-	// Updates the persistent owner id, the co-op control flags, and any live
-	// battlescape unit; when broadcast is true the change is sent to the peer.
-	// Unlike the legacy "giveUnit" loan this overwrites unconditionally, so
-	// soldiers can be traded back and forth any number of times.
+	// Outside battle the soldier is physically moved: serialized to YAML,
+	// removed from the local base rosters and sent to the peer, who adds it to
+	// their own base. During battle only the control flags flip immediately
+	// (the live BattleUnit still references the Soldier); the physical move is
+	// queued and processed by processPendingSoldierTransfers() after the
+	// mission ends. Transfers overwrite unconditionally, so soldiers can be
+	// traded back and forth any number of times.
 	void transferSoldierOwnership(Soldier* soldier, int newOwnerId, bool broadcast);
+	// Completes queued in-battle transfers once no battle is active. Must run
+	// before the post-battle coop cleanup deletes other-player soldiers
+	// (GeoscapeState calls it at the top of its coopMissionEnd handling).
+	void processPendingSoldierTransfers();
+
+  private:
+	// Serializes the soldier and sends the physical-transfer packet.
+	void sendSoldierTransferPacket(Soldier* soldier, int newOwnerId);
+	// Erases the soldier pointer from every base roster (including the
+	// SoldiersState/CraftSoldiersState base_oldsoldiers snapshots).
+	void removeSoldierFromLocalBases(Soldier* soldier);
+	// In-battle transfers waiting for the mission to end: soldier + new owner.
+	std::vector<std::pair<Soldier*, int> > _pendingSoldierTransfers;
+	// Soldiers transferred away are parked here instead of deleted: UI states
+	// (sort snapshots, open dialogs) may still hold pointers to them.
+	std::vector<Soldier*> _transferredSoldiers;
 };
 
 }
