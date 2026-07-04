@@ -35,8 +35,14 @@ class GameClient:
     def spawn(self, extra_args=()):
         env = os.environ.copy()
         env["OXC_TEST_PORT"] = str(self.port)
+        # tuck the window into a corner (host left, client right of it)
+        env["SDL_VIDEO_WINDOW_POS"] = "0,40" if "host" in self.name else "660,40"
         args = [EXE, "-user", self.user_dir] + list(extra_args)
-        self.proc = subprocess.Popen(args, env=env, cwd=os.path.dirname(EXE))
+        # best-effort: ask Windows to start the window without activating it
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        self.proc = subprocess.Popen(args, env=env, cwd=os.path.dirname(EXE), startupinfo=si)
 
     def connect(self, timeout=60):
         deadline = time.time() + timeout
@@ -102,11 +108,22 @@ def make_user_dir(name, saves=()):
     os.makedirs(os.path.join(d, "xcom1"))
     with open(os.path.join(REAL_USER, "options.cfg"), encoding="utf-8") as f:
         cfg = f.read()
+    import re
     # no intro cutscene, no audio - faster boots, quieter iteration
     cfg = cfg.replace("playIntro: true", "playIntro: false")
     for vol in ("musicVolume", "soundVolume", "uiVolume"):
-        import re
         cfg = re.sub(rf"{vol}: \d+", f"{vol}: 0", cfg)
+    # unobtrusive test windows: small, windowed, and never grab the user's
+    # mouse/keyboard (the user keeps working while tests run)
+    replacements = {
+        "captureMouse": "false",
+        "borderless": "false",
+        "fullscreen": "false",
+        "displayWidth": "640",
+        "displayHeight": "400",
+    }
+    for key, val in replacements.items():
+        cfg = re.sub(rf"(?m)^(\s*){key}: .*$", rf"\g<1>{key}: {val}", cfg)
     with open(os.path.join(d, "options.cfg"), "w", encoding="utf-8") as f:
         f.write(cfg)
     for save in saves:
