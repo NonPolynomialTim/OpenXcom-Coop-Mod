@@ -417,7 +417,11 @@ void BattlescapeGame::turnPlayerTarget(std::string obj_str)
 
 		if (isUnitAlreadyTurn == false)
 		{
-			statePushFront(new UnitTurnBState(this, _currentAction));
+			// coop: the unit's TU was already set to the host's post-turn value
+			// above (setTimeUnits), so replay the turn for animation only,
+			// without charging again (chargeTUs = false). Charging here would
+			// double the turn cost on the client.
+			statePushFront(new UnitTurnBState(this, _currentAction, false));
 		}
 		// door fix
 		else
@@ -1899,6 +1903,15 @@ void BattlescapeGame::endBattleTurnCoop()
  */
 void BattlescapeGame::setupCursor()
 {
+	// coop: while it's not our turn, the active player's synced actions must not
+	// drive our cursor (e.g. a teammate firing would otherwise flip us to CT_AIM).
+	// Keep the standard box cursor for the off-turn player.
+	if (getCoopMod()->getCoopStatic() && isYourTurn != 2 && isYourTurn != 0)
+	{
+		getMap()->setCursorType(CT_NORMAL);
+		return;
+	}
+
 	if (_currentAction.targeting)
 	{
 		if (_currentAction.type == BA_THROW)

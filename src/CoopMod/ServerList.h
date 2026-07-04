@@ -43,6 +43,7 @@ class ServerList : public State
 protected:
 	TextButton *_btnHost, *_btnDirectConnect, *_btnAddServer, *_btnRefresh, *_btnCancel, *_btnFilter;
 	TextEdit *_search, *_playername;
+	Text *_lblPlayerName;
 	Window *_window;
 	Text *_txtTitle, *_txtName, *_txtPlayers, *_txtRegion, *_txtJoin, *_txtPasswordRequired;
 	TextList *_lstServers;
@@ -58,6 +59,8 @@ protected:
 	std::string selectedManualServers = "ANY SERVER";
 	unsigned int _firstValidRow = 0;
 	bool _sortable;
+	// Shows the "master server unavailable" notice at most once per browser session.
+	bool _masterServerWarningShown = false;
 	void updateArrows();
 	void updateServerList();
 	void loadServersFromJson();

@@ -1759,7 +1759,7 @@ void connectionTCP::initProfile(bool clientInBattle, bool inBattle)
 				connectionTCP::LobbyFileStatus = 1;
 			}
 		}
-		// CHECK IF THE HOST IS IN BATTLE — IF SO, ADD JOINERS; OTHERWISE DO NOTHING
+		// CHECK IF THE HOST IS IN BATTLE ï¿½ IF SO, ADD JOINERS; OTHERWISE DO NOTHING
 		else if (inBattle == true)
 		{
 
@@ -2141,9 +2141,27 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 
 	}
 
+	if (stateString == "motion_scan")
+	{
+		if (_game->getSavedGame() && _game->getSavedGame()->getSavedBattle())
+		{
+			int unit_id = obj["unit_id"].asInt();
+			int turn = obj["turn"].asInt();
+
+			for (auto& unit : *_game->getSavedGame()->getSavedBattle()->getUnits())
+			{
+				if (unit->getId() == unit_id)
+				{
+					unit->setScannedTurn(turn);
+					break;
+				}
+			}
+		}
+	}
+
 	if (stateString == "abortPath")
 	{
-	
+
 		int unit_id = obj["unit_id"].asInt();
 
 		int x = obj["x"].asInt();
@@ -2355,7 +2373,27 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 
 		std::string time_speed = obj["time_speed"].asString();
 		other_time_speed_coop = time_speed;
-	
+		// Persistent copy for the geoscape ally-speed indicator (other_time_speed_coop
+		// is cleared every timeAdvance, so it can't drive the UI on its own).
+		peerTimeSpeedId = time_speed;
+		// A "time" packet is emitted every geoscape think() and carries where on the
+		// geoscape the sender is: -1 = normal (ally marker tracks their speed), 0 = an
+		// open dogfight window (marker -> Intercept). Navigating to a sub-screen stops
+		// these packets, so the last dedicated geo_focus value sticks instead.
+		peerFocusScreen = obj.get("geo_focus", -1).asInt();
+		// Peer heartbeat (both sides): note when we last heard from the peer on the
+		// geoscape. The host's timeAdvance() freezes the shared clock when this goes
+		// stale, and both sides dim the ally marker to yellow when it does.
+		lastPeerTimePacketMs = SDL_GetTicks();
+
+	}
+
+	if (stateString == "geo_focus")
+	{
+		// coop: the peer navigated to a geoscape sub-screen (0..5 toolbar index). The
+		// ally marker on our geoscape moves to that toolbar button; -1 (back on the
+		// geoscape) is restored by the next "time" packet.
+		peerFocusScreen = obj["screen"].asInt();
 	}
 
 	if (stateString == "changeHost")
@@ -3717,7 +3755,7 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 							int mana = obj["units"][i]["mana"].asInt();
 							int stunlevel = obj["units"][i]["stunlevel"].asInt();
 
-							int motionpoints = obj["motionpoints"].asInt();
+							int motionpoints = obj["units"][i]["motionpoints"].asInt();
 
 							int setDirection = obj["units"][i]["setDirection"].asInt();
 							int setFaceDirection = obj["units"][i]["setFaceDirection"].asInt();
@@ -5321,7 +5359,7 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 								int mana = obj["units"][i]["mana"].asInt();
 								int stunlevel = obj["units"][i]["stunlevel"].asInt();
 								bool is_out = obj["units"][i]["is_out"].asBool();
-								int motionpoints = obj["motionpoints"].asInt();
+								int motionpoints = obj["units"][i]["motionpoints"].asInt();
 
 								int setDirection = obj["units"][i]["setDirection"].asInt();
 								int setFaceDirection = obj["units"][i]["setFaceDirection"].asInt();
@@ -5644,6 +5682,8 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 		long long saveID = obj["saveID"].asInt64();
 		connectionTCP::saveID = saveID;
 
+		tcpPlayerName = obj.get("playername", tcpPlayerName).asString();
+
 		_game->pushState(new Profile);
 
 	}
@@ -5683,6 +5723,8 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 		connectionTCP::forceCloseCoopStateMenu = true;
 		connectionTCP::forceClosePasswordCheckMenu = true;
 
+		tcpPlayerName = obj.get("playername", tcpPlayerName).asString();
+
 		_game->pushState(new Profile);
 
 		Json::Value root;
@@ -5703,31 +5745,6 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 			j_markers = "";
 
 			_battleInit = false;
-
-			// Define the file path and values to write
-			std::string filename = Options::getMasterUserFolder() + "/ip_address.json";
-
-			// Create JSON object
-			Json::Value root133;
-			root133["ip"] = ipAddress;
-			root133["port"] = tcp_port;
-			root133["name"] = sendTcpPlayer;
-			root133["server"] = sendTcpServerName;
-
-			// Write JSON to file
-			std::ofstream file(filename);
-			if (file.is_open())
-			{
-				Json::StreamWriterBuilder writer;
-				file << Json::writeString(writer, root133);
-				file.close();
-
-				std::cout << "IP address and player name written to " << filename << std::endl;
-			}
-			else
-			{
-				std::cerr << "Failed to open file for writing." << std::endl;
-			}
 
 			// RESET ALL SOLDIERS OUT OF THE BASES
 			for (auto* base : *_game->getSavedGame()->getBases())
@@ -5810,6 +5827,9 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 		{
 			root["state"] = "COOP_READY_CLIENT_REQUEST_PROFILE";
 		}
+
+		root["playername"] = sendTcpPlayer;
+		root["servername"] = sendTcpServerName;
 
 		sendTCPPacketData(root.toStyledString());
 
@@ -5970,31 +5990,6 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 		// bases
 		int64_t base_count = obj["base_count"].asInt64();
 		playersBases = base_count;
-
-		// Define the file path and values to write
-		std::string filename = Options::getMasterUserFolder() + "/ip_address.json";
-
-		// Create JSON object
-		Json::Value root135;
-		root135["ip"] = ipAddress;
-		root135["port"] = tcp_port;
-		root135["name"] = sendTcpPlayer;
-		root135["server"] = sendTcpServerName;
-
-		// Write JSON to file
-		std::ofstream file(filename);
-		if (file.is_open())
-		{
-			Json::StreamWriterBuilder writer;
-			file << Json::writeString(writer, root135);
-			file.close();
-
-			std::cout << "IP address and player name written to " << filename << std::endl;
-		}
-		else
-		{
-			std::cerr << "Failed to open file for writing." << std::endl;
-		}
 
 		// campaign check
 		bool host_coop_campaign = obj["coop_campaign"].asBool();
@@ -7850,6 +7845,10 @@ void connectionTCP::disconnectTCP(bool isMain)
 		_waitBC = false;
 		_waitBH = false;
 		coopSession = false;
+		// coop: clear the cached teammate geoscape speed/focus so a stale '+' marker
+		// doesn't linger after disconnect.
+		peerTimeSpeedId = "";
+		peerFocusScreen = -1;
 		connectionTCP::lobby_timer = -1;
 		connectionTCP::isCoopSessionLocked = false;
 		connectionTCP::isPlayerReady = false;
