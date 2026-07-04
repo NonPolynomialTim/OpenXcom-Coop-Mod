@@ -44,18 +44,29 @@ TransferNoticeState::TransferNoticeState(const std::string &message)
 	// flicker, works on geoscape, basescape and the peer-base view alike.
 	// Color indices come from an interface designed for that palette, or the
 	// text is illegible (sackSoldier's dark-blue text over PAL_GEOSCAPE).
+	// Skip other notices when deciding the context: with two notices stacked,
+	// the "top state" is the first notice, not the screen underneath.
 	std::string category = "sackSoldier";
 	std::string textElement = "text";
-	if (!_game->getStates().empty())
+	State* context = nullptr;
+	for (auto it = _game->getStates().rbegin(); it != _game->getStates().rend(); ++it)
 	{
-		State* top = _game->getStates().back();
-		setStatePalette(top->getPalette());
-		if (dynamic_cast<GeoscapeState*>(top))
+		if (dynamic_cast<TransferNoticeState*>(*it) == nullptr)
+		{
+			context = *it;
+			break;
+		}
+	}
+	if (context)
+	{
+		setStatePalette(context->getPalette());
+		if (dynamic_cast<GeoscapeState*>(context))
 		{
 			category = "geoManufactureComplete"; // standard geoscape popup colors
 			textElement = "text1";
 		}
 	}
+	_category = category;
 
 	add(_window, "window", category);
 	add(_txtMessage, textElement, category);

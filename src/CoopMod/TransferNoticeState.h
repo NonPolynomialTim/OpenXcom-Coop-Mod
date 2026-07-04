@@ -40,10 +40,13 @@ private:
 	Window *_window;
 	Text *_txtMessage;
 	TextButton *_btnOk;
+	std::string _category;
 
 public:
 	TransferNoticeState(const std::string &message);
 	void btnOkClick(Action *action);
+	/// Interface category the widgets were themed with (test introspection).
+	const std::string &getCategory() const { return _category; }
 };
 
 }

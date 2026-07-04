@@ -1,14 +1,9 @@
-"""Autonomous test: save-rollback reconciliation for soldier transfers.
+"""Autonomous test: save-rollback semantics for soldier transfers.
 
-Scenario from the bug report:
-  host has A,B; transfers B to client; host quits WITHOUT saving; on the next
-  session host's save still contains B while the client's contains B too ->
-  duplicate. Symmetrically, a client rollback would make B vanish everywhere.
-
-The fix: transfer receipts persisted inside each save + a receipt exchange on
-session start (reconcileTransferLog). This test simulates rollbacks in-session
-via load_save (which resets the in-memory receipt log from the file, exactly
-like a fresh boot) and forces the exchange with sync_transfer_log.
+Spec: a save rollback UNDOES the trade on both sides - the giver keeps or
+regains the soldier, the receiver's copy is revoked. Tested in BOTH transfer
+directions (host->client and client->host), plus the stacked-notice font fix
+(3 notices in a row over the geoscape must all use geoscape popup colors).
 
 Run:  python tools/coop_test/test_transfer_rollback.py
 """
@@ -23,9 +18,6 @@ from test_bug_fixes import bootstrap_fresh_session, own_base
 
 
 def soldier_count(gc, name, owner=None):
-    """Count soldiers by name; owner filter separates a transferred copy
-    (owner==1) from an unrelated same-name soldier the other save may have
-    rolled from the same RNG name pool."""
     n = 0
     r = gc.ok({"cmd": "get_soldiers"})
     for b in r["bases"]:
@@ -33,6 +25,76 @@ def soldier_count(gc, name, owner=None):
             if s["name"] == name and (owner is None or s["owner"] == owner):
                 n += 1
     return n
+
+
+def dismiss_all_notices(gc):
+    while True:
+        r = gc.cmd({"cmd": "dismiss_notice"})
+        if not r.get("ok"):
+            return
+
+
+def run_direction(giver, receiver, receiver_owner_id, tag):
+    """Both rollback cases for one transfer direction."""
+    # Fresh saves can roll IDENTICAL rosters (same RNG seed), so give the
+    # test subject a globally unique name for unambiguous counting.
+    soldier = f"XferTest {tag}"
+    original = own_base(giver)["soldiers"][0]["name"]
+    giver.ok({"cmd": "rename_soldier", "name": original, "newName": soldier})
+
+    giver.ok({"cmd": "save_game", "file": f"{tag}_giver_pre.sav"})
+    receiver.ok({"cmd": "save_game", "file": f"{tag}_recv_pre.sav"})
+
+    # ---- transfer ----
+    giver.ok({"cmd": "transfer", "name": soldier, "owner": receiver_owner_id})
+    receiver.wait_for("transfer applied",
+                      lambda: (soldier_count(receiver, soldier, owner=receiver_owner_id) == 1) or None, timeout=30)
+    dismiss_all_notices(receiver)
+    assert soldier_count(giver, soldier) == 0
+
+    # ==== CASE 1: giver rolls back -> trade undone, receiver copy revoked ====
+    giver.ok({"cmd": "load_save", "file": f"{tag}_giver_pre.sav"})
+    assert soldier_count(giver, soldier) == 1
+
+    receiver.ok({"cmd": "sync_transfer_log"})  # receiver announces its receipts
+
+    receiver.wait_for(f"{tag} case1: receiver copy revoked",
+                      lambda: (soldier_count(receiver, soldier, owner=receiver_owner_id) == 0) or None, timeout=30)
+    assert soldier_count(giver, soldier) == 1, "giver must keep the resurrected soldier"
+    dismiss_all_notices(receiver)
+    print(f"PASS {tag} case1: giver rollback undoes trade (giver keeps, receiver revoked)")
+
+    # ---- transfer again for case 2 ----
+    giver.ok({"cmd": "transfer", "name": soldier, "owner": receiver_owner_id})
+    receiver.wait_for("re-transfer applied",
+                      lambda: (soldier_count(receiver, soldier, owner=receiver_owner_id) == 1) or None, timeout=30)
+    dismiss_all_notices(receiver)
+    giver.ok({"cmd": "save_game", "file": f"{tag}_giver_post.sav"})  # giver saved AFTER
+
+    # ==== CASE 2: receiver rolls back -> trade undone, giver restored ====
+    receiver.ok({"cmd": "load_save", "file": f"{tag}_recv_pre.sav"})
+    assert soldier_count(receiver, soldier, owner=receiver_owner_id) == 0
+
+    receiver.ok({"cmd": "sync_transfer_log"})  # receiver announces (no receipts)
+
+    giver.wait_for(f"{tag} case2: soldier restored to giver",
+                   lambda: (soldier_count(giver, soldier) == 1) or None, timeout=30)
+    assert soldier_count(receiver, soldier, owner=receiver_owner_id) == 0
+    dismiss_all_notices(giver)
+    print(f"PASS {tag} case2: receiver rollback undoes trade (soldier restored to giver)")
+
+
+def test_stacked_notices(gc):
+    """3 notices in a row over the geoscape: every one must use geoscape
+    popup colors, not just the first."""
+    for i in range(3):
+        gc.ok({"cmd": "show_notice", "message": f"stacked notice {i + 1}"})
+    cats = gc.ok({"cmd": "get_notices"})["categories"]
+    assert len(cats) == 3, f"expected 3 notices, got {cats}"
+    assert all(c == "geoManufactureComplete" for c in cats), f"wrong categories: {cats}"
+    for _ in range(3):
+        gc.ok({"cmd": "dismiss_notice"})
+    print("PASS stacked notices: all 3 use geoscape popup colors")
 
 
 def main():
@@ -43,56 +105,10 @@ def main():
         host.connect(); client.connect()
         bootstrap_fresh_session(host, client)
 
-        hbase = own_base(host)
-        soldier = hbase["soldiers"][0]["name"]
-        host_base_id = hbase["coopBaseId"]
+        test_stacked_notices(host)
 
-        # pre-transfer snapshots (the states a no-save quit would roll back to)
-        host.ok({"cmd": "save_game", "file": "host_pre.sav"})
-        client.ok({"cmd": "save_game", "file": "client_pre.sav"})
-
-        # --- transfer B to the client ---
-        host.ok({"cmd": "transfer", "name": soldier, "owner": 1})
-
-        def client_has():
-            r = client.cmd({"cmd": "get_mirror_soldiers", "coopBaseId": host_base_id})
-            return r.get("ok") and any(s["name"] == soldier for s in r["soldiers"]) or None
-
-        client.wait_for("transfer applied", client_has, timeout=30)
-        client.ok({"cmd": "dismiss_notice"})
-        assert soldier_count(host, soldier) == 0
-        baseline_client_own = soldier_count(client, soldier) - soldier_count(client, soldier, owner=1)
-
-        # ============ CASE 1: host rolls back (duplicate) ============
-        host.ok({"cmd": "load_save", "file": "host_pre.sav"})
-        assert soldier_count(host, soldier) == 1, "rollback should resurrect the soldier on the host"
-        log = host.ok({"cmd": "get_transfer_log"})["entries"]
-        assert not log, f"rolled-back host save should have no receipts, got {log}"
-
-        # receipt exchange (as a reconnect would do)
-        client.ok({"cmd": "sync_transfer_log"})
-
-        host.wait_for("stale duplicate removed on host",
-                      lambda: (soldier_count(host, soldier) == 0) or None, timeout=30)
-        assert soldier_count(client, soldier, owner=1) == 1
-        print(f"PASS case1: host rollback healed - '{soldier}' exists exactly once (client)")
-
-        # ============ CASE 2: client rolls back (vanished) ============
-        client.ok({"cmd": "load_save", "file": "client_pre.sav"})
-        assert soldier_count(client, soldier, owner=1) == 0, "client rollback should drop the received soldier"
-
-        # the CLIENT announces its (rolled back, receipt-less) state; the host
-        # sees its sent-receipt unacknowledged and resends. On a real
-        # reconnect both sides announce automatically.
-        client.ok({"cmd": "sync_transfer_log"})
-
-        def client_regained():
-            return (soldier_count(client, soldier, owner=1) == 1) or None
-
-        client.wait_for("transfer resent to rolled-back client", client_regained, timeout=30)
-        client.ok({"cmd": "dismiss_notice"})
-        assert soldier_count(host, soldier) == 0
-        print(f"PASS case2: client rollback healed - '{soldier}' resent, exists exactly once (client)")
+        run_direction(host, client, receiver_owner_id=1, tag="h2c")
+        run_direction(client, host, receiver_owner_id=0, tag="c2h")
 
         print("TEST PASSED")
     finally:

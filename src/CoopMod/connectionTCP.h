@@ -531,6 +531,10 @@ class connectionTCP
 	void appendTransferReceipt(const Json::Value& receipt);
 	void sendTransferLogSummary();
 	void reconcileTransferLog(const Json::Value& obj);
+	void eraseReceiptByXfer(long long xferId, const std::string& dir);
+	// Re-instantiates a soldier from a sent-receipt's YAML into this save
+	// (rollback undo: the giver gets the soldier back).
+	void restoreSoldierFromReceipt(const Json::Value& receipt, int ownerId);
 };
 
 }

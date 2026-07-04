@@ -927,8 +927,12 @@ void connectionTCP::reconcileTransferLog(const Json::Value& obj)
 		peerRecvIds.insert(e["x"].asInt64());
 	}
 
-	// Case 1: the peer holds a soldier we supposedly sent, but our (rolled
-	// back) save has no record of sending it - our copy is a stale duplicate.
+	// Semantics: a save rollback UNDOES the trade on both sides - the giver
+	// keeps/regains the soldier, the receiver's copy is revoked.
+
+	// Case 1: the peer recorded receiving a transfer that our (rolled back)
+	// save has no record of sending. Our resurrected copy is authoritative:
+	// keep it and tell the peer to revoke theirs.
 	for (const auto& e : obj["recv"])
 	{
 
@@ -939,75 +943,19 @@ void connectionTCP::reconcileTransferLog(const Json::Value& obj)
 			continue;
 		}
 
-		int sid = e["sid"].asInt();
-		std::string name = e["n"].asString();
+		Log(LOG_INFO) << "[coop-transfer] SYNC revoking transfer x=" << x << " '" << e["n"].asString() << "' (our save predates it - trade undone)";
 
-		if (_game->getSavedGame())
-		{
-
-			bool removed = false;
-
-			for (auto& base : *_game->getSavedGame()->getBases())
-			{
-
-				auto& soldiers = *base->getSoldiers();
-
-				for (auto it = soldiers.begin(); it != soldiers.end(); ++it)
-				{
-
-					if ((*it)->getId() == sid && (*it)->getName() == name)
-					{
-
-						Log(LOG_INFO) << "[coop-transfer] SYNC removing stale duplicate '" << name << "' id=" << sid << " (peer owns it, our save predates the transfer)";
-
-						Soldier* stale = *it;
-						stale->setCraft(0);
-
-						// Synthetic sent-receipt INCLUDING the soldier data:
-						// if the peer later rolls back too, we can still
-						// resend from this - otherwise the soldier would be
-						// gone from both saves forever.
-						int stationId = stale->getCoopBase() != -1 ? stale->getCoopBase() : base->_coop_base_id;
-
-						YAML::YamlRootNodeWriter w;
-						w.setAsMap();
-						stale->save(w["soldier"], _game->getMod()->getScriptGlobal());
-
-						Json::Value receipt;
-						receipt["x"] = Json::Value::Int64(x);
-						receipt["d"] = "s";
-						receipt["sid"] = sid;
-						receipt["n"] = name;
-						receipt["o"] = getHost() ? 1 : 0; // the peer owns it now
-						receipt["b"] = stationId;
-						receipt["y"] = w.emit().yaml;
-						appendTransferReceipt(receipt);
-
-						_transferredSoldiers.push_back(stale);
-						soldiers.erase(it);
-						removed = true;
-
-						break;
-
-					}
-
-				}
-
-				if (removed)
-				{
-					break;
-				}
-
-			}
-
-		}
+		Json::Value pkt;
+		pkt["state"] = "transferRevoke";
+		pkt["xfer_id"] = Json::Value::Int64(x);
+		sendTCPPacketData(pkt.toStyledString());
 
 	}
 
 	// Case 2: we have a sent-receipt (with the soldier's YAML) that the peer
 	// never recorded receiving - their save was rolled back past the
-	// transfer. Resend the original packet; their dedup won't block it (the
-	// id is in neither their session set nor their receipts).
+	// transfer, undoing the trade. Restore the soldier to OUR save (we were
+	// the giver) and drop the receipt.
 	for (auto& r : mySentFull)
 	{
 
@@ -1018,19 +966,147 @@ void connectionTCP::reconcileTransferLog(const Json::Value& obj)
 			continue;
 		}
 
-		Log(LOG_INFO) << "[coop-transfer] SYNC resending transfer x=" << x << " soldier '" << r["n"].asString() << "' (peer save predates it)";
+		Log(LOG_INFO) << "[coop-transfer] SYNC restoring '" << r["n"].asString() << "' to us x=" << x << " (peer save predates the transfer - trade undone)";
 
-		Json::Value pkt;
-		pkt["state"] = "transferSoldier";
-		pkt["soldier_id"] = r["sid"];
-		pkt["owner"] = r["o"];
-		pkt["unit_id"] = -1;
-		pkt["station_base_id"] = r["b"];
-		pkt["xfer_id"] = r["x"];
-		pkt["soldier_yaml"] = r["y"];
+		int localPlayerId = getHost() ? 0 : 1;
+		restoreSoldierFromReceipt(r, localPlayerId);
+		eraseReceiptByXfer(x, "s");
 
-		sendTCPPacketData(pkt.toStyledString());
+		_game->pushState(new TransferNoticeState(r["n"].asString() + " returned to you (the other player's save predates the transfer)"));
 
+	}
+
+}
+
+void connectionTCP::eraseReceiptByXfer(long long xferId, const std::string& dir)
+{
+
+	Json::CharReaderBuilder rb;
+	std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+
+	for (auto it = coopTransferLog.begin(); it != coopTransferLog.end(); ++it)
+	{
+
+		Json::Value r;
+		std::string errs;
+
+		if (reader->parse(it->data(), it->data() + it->size(), &r, &errs) && r["d"].asString() == dir && r["x"].asInt64() == xferId)
+		{
+			coopTransferLog.erase(it);
+			return;
+		}
+
+	}
+
+}
+
+void connectionTCP::restoreSoldierFromReceipt(const Json::Value& receipt, int ownerId)
+{
+
+	if (!_game->getSavedGame())
+	{
+		return;
+	}
+
+	try
+	{
+
+		int stationBaseId = receipt["b"].asInt();
+
+		YAML::YamlRootNodeReader reader(YAML::YamlString{receipt["y"].asString()}, "transferRestore");
+		auto soldierReader = reader["soldier"];
+		std::string type = soldierReader["type"].readVal(_game->getMod()->getSoldiersList().front());
+
+		if (!_game->getMod()->getSoldier(type))
+		{
+			return;
+		}
+
+		Base* homeBase = 0;
+		Base* firstOwnBase = 0;
+
+		for (auto& base : *_game->getSavedGame()->getBases())
+		{
+
+			if (base->_coopBase == false && base->_coopIcon == false)
+			{
+
+				if (!firstOwnBase)
+				{
+					firstOwnBase = base;
+				}
+
+				if (base->_coop_base_id == stationBaseId)
+				{
+					homeBase = base;
+					break;
+				}
+
+			}
+
+		}
+
+		Base* targetBase = homeBase ? homeBase : firstOwnBase;
+
+		if (!targetBase)
+		{
+			return;
+		}
+
+		Soldier* soldier = new Soldier(_game->getMod()->getSoldier(type), 0, 0 /*nationality*/);
+		soldier->load(soldierReader, _game->getMod(), _game->getSavedGame(), _game->getMod()->getScriptGlobal());
+
+		int maxId = soldier->getId();
+		bool collision = false;
+
+		for (auto& base : *_game->getSavedGame()->getBases())
+		{
+			for (auto& s : *base->getSoldiers())
+			{
+				if (s->getId() == soldier->getId())
+				{
+					collision = true;
+				}
+				maxId = std::max(maxId, s->getId());
+			}
+		}
+
+		for (auto& s : *_game->getSavedGame()->getDeadSoldiers())
+		{
+			if (s->getId() == soldier->getId())
+			{
+				collision = true;
+			}
+			maxId = std::max(maxId, s->getId());
+		}
+
+		if (collision)
+		{
+			soldier->setId(maxId + 1);
+		}
+
+		soldier->setCraft(0);
+		soldier->setCoopBase(homeBase ? -1 : stationBaseId);
+		soldier->setOwnerPlayerId(ownerId);
+		soldier->setCoop(ownerId);
+
+		targetBase->getSoldiers()->push_back(soldier);
+
+		if (!targetBase->base_oldsoldiers.empty())
+		{
+			targetBase->base_oldsoldiers.push_back(soldier);
+		}
+		if (!targetBase->base_oldsoldiers2.empty())
+		{
+			targetBase->base_oldsoldiers2.push_back(soldier);
+		}
+
+		Log(LOG_INFO) << "[coop-transfer] RESTORE '" << soldier->getName() << "' id=" << soldier->getId() << " to base '" << targetBase->getName() << "'";
+
+	}
+	catch (const std::exception& e)
+	{
+		Log(LOG_INFO) << "[coop-transfer] RESTORE failed: " << e.what();
 	}
 
 }
@@ -2452,6 +2528,87 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 		reconcileTransferLog(obj);
 	}
 
+	if (stateString == "transferRevoke")
+	{
+
+		// The giver's save was rolled back past this transfer: the trade is
+		// undone, our received copy goes away. Identify it via our receipt.
+		long long x = obj["xfer_id"].asInt64();
+
+		Json::CharReaderBuilder rrb;
+		std::unique_ptr<Json::CharReader> rreader(rrb.newCharReader());
+
+		for (auto& line : coopTransferLog)
+		{
+
+			Json::Value r;
+			std::string errs2;
+
+			if (rreader->parse(line.data(), line.data() + line.size(), &r, &errs2) && r["d"].asString() == "r" && r["x"].asInt64() == x)
+			{
+
+				int rid = r.get("rid", r["sid"]).asInt();
+				std::string name = r["n"].asString();
+
+				if (_game->getSavedGame())
+				{
+
+					bool removed = false;
+
+					for (auto& base : *_game->getSavedGame()->getBases())
+					{
+
+						auto& soldiers = *base->getSoldiers();
+
+						for (auto it = soldiers.begin(); it != soldiers.end(); ++it)
+						{
+
+							if ((*it)->getId() == rid && (*it)->getName() == name)
+							{
+
+								Log(LOG_INFO) << "[coop-transfer] REVOKE removing '" << name << "' id=" << rid << " (giver's save predates the transfer)";
+
+								Soldier* victim = *it;
+								victim->setCraft(0);
+								_transferredSoldiers.push_back(victim);
+
+								// purge the roster snapshots too
+								auto eraseFrom = [victim](std::vector<Soldier*>& list)
+								{
+									list.erase(std::remove(list.begin(), list.end(), victim), list.end());
+								};
+								eraseFrom(base->base_oldsoldiers);
+								eraseFrom(base->base_oldsoldiers2);
+
+								soldiers.erase(it);
+								removed = true;
+
+								_game->pushState(new TransferNoticeState(getCurrentClientName() + " reclaimed " + victim->getName() + " (their save predates the transfer)"));
+
+								break;
+
+							}
+
+						}
+
+						if (removed)
+						{
+							break;
+						}
+
+					}
+
+				}
+
+				eraseReceiptByXfer(x, "r");
+				break;
+
+			}
+
+		}
+
+	}
+
 	if (stateString == "transferSoldier")
 	{
 
@@ -2698,6 +2855,7 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 								receipt["x"] = obj["xfer_id"];
 								receipt["d"] = "r";
 								receipt["sid"] = soldier_id;
+								receipt["rid"] = soldier->getId(); // our id (post re-id), for revokes
 								receipt["n"] = soldier->getName();
 								appendTransferReceipt(receipt);
 							}
