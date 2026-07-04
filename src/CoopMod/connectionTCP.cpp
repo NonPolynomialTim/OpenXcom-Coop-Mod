@@ -711,6 +711,39 @@ void connectionTCP::transferSoldierOwnership(Soldier* soldier, int newOwnerId, b
 void connectionTCP::processPendingSoldierTransfers()
 {
 
+	// Replay physical transfers that arrived while our world was swapped out
+	// for the peer's base view. The flag clears before LoadGameState has
+	// actually restored our save, so also require that an own (non-mirror)
+	// base is present - the swapped peer world has none.
+	bool ownWorldReady = false;
+
+	if (!_pendingIncomingTransfers.empty() && _game->getCoopMod()->playerInsideCoopBase == false && _game->getSavedGame())
+	{
+
+		for (auto& base : *_game->getSavedGame()->getBases())
+		{
+			if (base->_coopBase == false && base->_coopIcon == false)
+			{
+				ownWorldReady = true;
+				break;
+			}
+		}
+
+	}
+
+	if (ownWorldReady)
+	{
+
+		std::vector<Json::Value> replay;
+		replay.swap(_pendingIncomingTransfers);
+
+		for (auto& obj : replay)
+		{
+			onTCPMessage("transferSoldier", obj);
+		}
+
+	}
+
 	if (_game->getSavedGame() && !_game->getSavedGame()->getSavedBattle() && getCoopStatic() && getCoopCampaign() && _pendingSoldierTransfers.empty())
 	{
 
@@ -2181,7 +2214,17 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 			              << " hasYaml=" << (obj.isMember("soldier_yaml") ? 1 : 0)
 			              << " inBattle=" << (_game->getSavedGame()->getSavedBattle() ? 1 : 0);
 
-			if (obj.isMember("soldier_yaml"))
+			if (obj.isMember("soldier_yaml") && _game->getCoopMod()->playerInsideCoopBase == true)
+			{
+
+				// Our SavedGame is currently swapped out for the peer's base
+				// view; applying the transfer now would land the soldier in
+				// the temporary world and lose it on exit. Replay later.
+				Log(LOG_INFO) << "[coop-transfer] RECV deferred (viewing peer base)";
+				_pendingIncomingTransfers.push_back(obj);
+
+			}
+			else if (obj.isMember("soldier_yaml"))
 			{
 
 				// Physical transfer: the giver removed the soldier from their
@@ -2198,18 +2241,6 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 
 					if (_game->getMod()->getSoldier(type))
 					{
-
-						// Ignore duplicate deliveries via the sender's unique
-						// packet id. (Roster comparisons are unreliable: two
-						// fresh saves both number soldiers from 1 and can even
-						// roll identical names.)
-						long long xferId = obj.get("xfer_id", 0).asInt64();
-						bool exists = (xferId != 0 && _seenTransferPacketIds.count(xferId) != 0);
-
-						if (xferId != 0)
-						{
-							_seenTransferPacketIds.insert(xferId);
-						}
 
 						// If the station base is one of OUR real bases, the
 						// soldier is coming home: it lives there normally.
@@ -2241,12 +2272,36 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 
 						Base* targetBase = homeBase ? homeBase : firstOwnBase;
 
+						// No own base in the current save = our world is not
+						// (yet) loaded, e.g. the transitional frames right
+						// after leaving the peer's base view. Never consume
+						// the packet in that window - defer and replay.
+						if (!targetBase)
+						{
+							Log(LOG_INFO) << "[coop-transfer] RECV deferred (no own base in current save)";
+							_pendingIncomingTransfers.push_back(obj);
+						}
+						else
+						{
+
+						// Ignore duplicate deliveries via the sender's unique
+						// packet id. (Roster comparisons are unreliable: two
+						// fresh saves both number soldiers from 1 and can even
+						// roll identical names.)
+						long long xferId = obj.get("xfer_id", 0).asInt64();
+						bool exists = (xferId != 0 && _seenTransferPacketIds.count(xferId) != 0);
+
+						if (xferId != 0)
+						{
+							_seenTransferPacketIds.insert(xferId);
+						}
+
 						Log(LOG_INFO) << "[coop-transfer] RECV type=" << type << " exists=" << (exists ? 1 : 0)
 						              << " homeBase=" << (homeBase ? homeBase->getName() : "none")
-						              << " targetBase=" << (targetBase ? targetBase->getName() : "NONE")
+						              << " targetBase=" << targetBase->getName()
 						              << " stationBaseId=" << stationBaseId;
 
-						if (!exists && targetBase)
+						if (!exists)
 						{
 
 							Soldier* soldier = new Soldier(_game->getMod()->getSoldier(type), 0, 0 /*nationality*/);
@@ -2308,6 +2363,8 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 							Log(LOG_INFO) << "[coop-transfer] RECV added soldier '" << soldier->getName()
 							              << "' id=" << soldier->getId() << " to base '" << targetBase->getName()
 							              << "' coopBase=" << soldier->getCoopBase();
+
+						}
 
 						}
 

@@ -40,8 +40,12 @@
 #include "../Menu/NewGameState.h"
 #include "../Geoscape/BuildNewBaseState.h"
 #include "../Geoscape/BaseNameState.h"
+#include "../Basescape/BasescapeState.h"
+#include "../Basescape/SoldiersState.h"
+#include "CoopState.h"
 #include "LobbyMenu.h"
 #include "Profile.h"
+#include "TransferSoldierMenu.h"
 #include "connectionTCP.h"
 
 namespace OpenXcom
@@ -301,6 +305,7 @@ std::string TestServer::execute(const std::string& line)
 			resp["inBattle"] = _game->getSavedGame() && _game->getSavedGame()->getSavedBattle();
 			resp["hostName"] = coop->getHostName();
 			resp["clientName"] = coop->getCurrentClientName();
+			resp["insideCoopBase"] = coop->playerInsideCoopBase;
 			resp["ok"] = true;
 		}
 		else if (cmd == "load_save")
@@ -513,6 +518,225 @@ std::string TestServer::execute(const std::string& line)
 				resp["soldiers"] = soldiers;
 				resp["ok"] = true;
 			}
+		}
+		else if (cmd == "open_soldiers")
+		{
+			std::string baseName = req.get("base", "").asString();
+			Base* target = nullptr;
+			if (_game->getSavedGame())
+			{
+				for (auto* base : *_game->getSavedGame()->getBases())
+				{
+					if (baseName.empty() ? (base->_coopBase == false && base->_coopIcon == false) : base->getName() == baseName)
+					{
+						target = base;
+						break;
+					}
+				}
+			}
+			if (target)
+			{
+				_game->pushState(new SoldiersState(target));
+				resp["ok"] = true;
+			}
+			else
+			{
+				resp["error"] = "base not found: " + baseName;
+			}
+		}
+		else if (cmd == "soldiers_ok")
+		{
+			SoldiersState* st = nullptr;
+			for (auto* s : _game->getStates())
+			{
+				if (auto* x = dynamic_cast<SoldiersState*>(s))
+				{
+					st = x;
+				}
+			}
+			if (st)
+			{
+				st->btnOkClick(nullptr);
+				resp["ok"] = true;
+			}
+			else
+			{
+				resp["error"] = "no SoldiersState in state stack";
+			}
+		}
+		else if (cmd == "visit_coop_base")
+		{
+			std::string baseName = req.get("base", "").asString();
+			Base* target = nullptr;
+			if (_game->getSavedGame())
+			{
+				for (auto* base : *_game->getSavedGame()->getBases())
+				{
+					if (base->_coopBase == true || base->_coopIcon == true)
+					{
+						if (baseName.empty() || base->getName() == baseName)
+						{
+							target = base;
+							break;
+						}
+					}
+				}
+			}
+			GeoscapeState* geo = _game->getGeoscapeState();
+			if (!target)
+			{
+				resp["error"] = "coop base not found: " + baseName;
+			}
+			else if (!geo)
+			{
+				resp["error"] = "no GeoscapeState";
+			}
+			else
+			{
+				// same as clicking the peer base marker (MultipleTargetsState)
+				coop->current_base_name = target->getName();
+				CoopState* w = new CoopState(50);
+				w->setGlobe(geo->getGlobe());
+				_game->pushState(w);
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "leave_base")
+		{
+			BasescapeState* st = nullptr;
+			for (auto* s : _game->getStates())
+			{
+				if (auto* x = dynamic_cast<BasescapeState*>(s))
+				{
+					st = x;
+				}
+			}
+			if (st)
+			{
+				st->btnGeoscapeClick(nullptr);
+				resp["ok"] = true;
+			}
+			else
+			{
+				resp["error"] = "no BasescapeState in state stack";
+			}
+		}
+		else if (cmd == "transfer_targets")
+		{
+			// What the transfer dialog would offer for this soldier - lets
+			// tests validate owner resolution + button names without UI.
+			std::string name = req.get("name", "").asString();
+			Soldier* found = nullptr;
+			if (_game->getSavedGame())
+			{
+				for (auto* base : *_game->getSavedGame()->getBases())
+				{
+					for (auto* s : *base->getSoldiers())
+					{
+						if (s->getName().find(name) != std::string::npos)
+						{
+							found = s;
+							break;
+						}
+					}
+					if (found) break;
+				}
+			}
+			if (!found)
+			{
+				resp["error"] = "soldier not found: " + name;
+			}
+			else
+			{
+				int currentOwner = TransferSoldierMenu::resolveOwnerId(found);
+				int localPlayerId = connectionTCP::getHost() ? 0 : 1;
+				Json::Value targets(Json::arrayValue);
+				for (int playerId = 0; playerId <= 1; ++playerId)
+				{
+					if (playerId != currentOwner)
+					{
+						Json::Value t;
+						t["id"] = playerId;
+						t["name"] = (playerId == localPlayerId) ? coop->getHostName() : coop->getCurrentClientName();
+						targets.append(t);
+					}
+				}
+				resp["currentOwner"] = currentOwner;
+				resp["localPlayer"] = localPlayerId;
+				resp["targets"] = targets;
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "open_transfer_dialog")
+		{
+			std::string name = req.get("name", "").asString();
+			Soldier* found = nullptr;
+			if (_game->getSavedGame())
+			{
+				for (auto* base : *_game->getSavedGame()->getBases())
+				{
+					for (auto* s : *base->getSoldiers())
+					{
+						if (s->getName().find(name) != std::string::npos)
+						{
+							found = s;
+							break;
+						}
+					}
+					if (found) break;
+				}
+			}
+			if (found)
+			{
+				_game->pushState(new TransferSoldierMenu(found, TransferSoldierMenu::resolveOwnerId(found)));
+				resp["ok"] = true;
+			}
+			else
+			{
+				resp["error"] = "soldier not found: " + name;
+			}
+		}
+		else if (cmd == "cancel_dialog")
+		{
+			TransferSoldierMenu* st = nullptr;
+			for (auto* s : _game->getStates())
+			{
+				if (auto* x = dynamic_cast<TransferSoldierMenu*>(s))
+				{
+					st = x;
+				}
+			}
+			if (st)
+			{
+				st->btnCancelClick(nullptr);
+				resp["ok"] = true;
+			}
+			else
+			{
+				resp["error"] = "no TransferSoldierMenu in state stack";
+			}
+		}
+		else if (cmd == "get_palettes")
+		{
+			// First N palette entries of the top two states, for asserting
+			// that a dialog adopted its parent's palette (flicker check).
+			Json::Value states(Json::arrayValue);
+			auto& stack = _game->getStates();
+			for (auto* s : stack)
+			{
+				Json::Value e;
+				e["state"] = typeid(*s).name();
+				Json::Value cols(Json::arrayValue);
+				SDL_Color* pal = s->getPalette();
+				for (int i = 0; i < 16; ++i)
+				{
+					cols.append((pal[i].r << 16) | (pal[i].g << 8) | pal[i].b);
+				}
+				e["colors"] = cols;
+				states.append(e);
+			}
+			resp["states"] = states;
+			resp["ok"] = true;
 		}
 		else if (cmd == "transfer")
 		{
