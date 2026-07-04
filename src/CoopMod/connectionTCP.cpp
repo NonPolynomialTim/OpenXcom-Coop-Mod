@@ -832,6 +832,8 @@ void connectionTCP::sendSoldierTransferPacket(Soldier* soldier, int newOwnerId)
 	obj["owner"] = newOwnerId;
 	obj["unit_id"] = -1;
 	obj["station_base_id"] = stationBaseId;
+	// unique per sender: local player id in the high digits + counter
+	obj["xfer_id"] = Json::Value::Int64((getHost() ? 1000000LL : 2000000LL) + (++_transferSendCounter));
 	obj["soldier_yaml"] = writer.emit().yaml;
 
 	std::string packet = obj.toStyledString();
@@ -2197,23 +2199,16 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 					if (_game->getMod()->getSoldier(type))
 					{
 
-						// Ignore duplicates (e.g. a resent packet).
-						bool exists = false;
+						// Ignore duplicate deliveries via the sender's unique
+						// packet id. (Roster comparisons are unreliable: two
+						// fresh saves both number soldiers from 1 and can even
+						// roll identical names.)
+						long long xferId = obj.get("xfer_id", 0).asInt64();
+						bool exists = (xferId != 0 && _seenTransferPacketIds.count(xferId) != 0);
 
-						for (auto& base : *_game->getSavedGame()->getBases())
+						if (xferId != 0)
 						{
-							for (auto& s : *base->getSoldiers())
-							{
-								if (s->getId() == soldier_id && s->getName() == soldierReader["name"].readVal(std::string()))
-								{
-									exists = true;
-									break;
-								}
-							}
-							if (exists)
-							{
-								break;
-							}
+							_seenTransferPacketIds.insert(xferId);
 						}
 
 						// If the station base is one of OUR real bases, the
