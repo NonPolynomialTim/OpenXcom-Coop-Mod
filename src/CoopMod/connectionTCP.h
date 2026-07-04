@@ -505,6 +505,12 @@ class connectionTCP
 	// the sweep in processPendingSoldierTransfers() parks exactly those (and
 	// nothing else - legacy saves carry unrelated ownerPlayerId values).
 	std::unordered_set<int> _transferredAwaySoldierIds;
+	// Duplicate-delivery guard for transferSoldier packets. Roster-based
+	// checks are unreliable: two fresh saves both number soldiers from 1 and
+	// can even roll identical names, so an incoming soldier can look like an
+	// existing local one. Sender stamps each packet with a unique id instead.
+	int _transferSendCounter = 0;
+	std::unordered_set<long long> _seenTransferPacketIds;
 };
 
 }

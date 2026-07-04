@@ -142,6 +142,7 @@ set ( coopmod_src
   CoopMod/CrashHandler.cpp
   CoopMod/OptionsMultiplayer.cpp
   CoopMod/Profile.cpp
+  CoopMod/TestServer.cpp
   CoopMod/TransferSoldierMenu.cpp
 )
 
