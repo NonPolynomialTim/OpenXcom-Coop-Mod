@@ -473,26 +473,32 @@ class connectionTCP
 	static bool canRemoveManuallyAddedServer;
 
 	// Permanently transfers a soldier to another player (0 = host, 1 = client).
-	// The soldier stays in the base it is currently in; only ownership changes,
-	// reusing the guest-soldier convention: coopBase == -1 means "owned by this
-	// machine's player", coopBase == <base id> means "peer-owned, stationed
-	// here" (hidden from the owner-machine's own lists, shown in the peer's
-	// mirror-base view, craft cleared). During battle only the control flags
-	// flip immediately; the coopBase change is queued and applied by
-	// processPendingSoldierTransfers() after the mission ends. Transfers
+	// Follows the guest-soldier model: a soldier's object lives in its OWNER's
+	// save, tagged with coopBase = the station base's coop id when that base
+	// belongs to the other player (-1 when stationed at one of the owner's own
+	// bases). The soldier is serialized, removed from the giver's save and
+	// recreated in the receiver's save, keeping the same station base - so it
+	// stays "in" the base it was in, and shows up when the new owner views
+	// that base. During battle only the control flags flip immediately; the
+	// physical move is queued and runs after the mission ends. Transfers
 	// overwrite unconditionally, so soldiers can be traded back and forth.
 	void transferSoldierOwnership(Soldier* soldier, int newOwnerId, bool broadcast);
-	// Applies queued in-battle transfers once no battle is active. Must run
+	// Completes queued in-battle transfers once no battle is active. Must run
 	// before the post-battle coop cleanup (GeoscapeState calls it first).
 	void processPendingSoldierTransfers();
 
   private:
-	// Applies the ownership flags + coopBase station flag to a soldier living
-	// in one of this machine's live bases. No-op if the soldier is not found
-	// (the peer's machine holds the live object instead).
-	void applySoldierOwnership(Soldier* soldier, int newOwnerId);
+	// Serializes the soldier (with its station base id) and sends the
+	// physical-transfer packet to the peer.
+	void sendSoldierTransferPacket(Soldier* soldier, int newOwnerId);
+	// Erases the soldier pointer from every base roster (including the
+	// SoldiersState/CraftSoldiersState base_oldsoldiers snapshots).
+	void removeSoldierFromLocalBases(Soldier* soldier);
 	// In-battle transfers waiting for the mission to end: soldier + new owner.
 	std::vector<std::pair<Soldier*, int> > _pendingSoldierTransfers;
+	// Soldiers transferred away are parked here instead of deleted: UI states
+	// (sort snapshots, open dialogs) may still hold pointers to them.
+	std::vector<Soldier*> _transferredSoldiers;
 };
 
 }
