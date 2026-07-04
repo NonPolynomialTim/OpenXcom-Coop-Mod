@@ -54,6 +54,7 @@
 #include "ModCheckMenu.h"
 #include "connectionUDP/connection_udp_glue.h"
 
+#include "../Engine/Logger.h"
 #include "../Engine/Yaml.h"
 #include "../Mod/Mod.h"
 #include "../Savegame/Base.h"
@@ -639,6 +640,11 @@ void connectionTCP::transferSoldierOwnership(Soldier* soldier, int newOwnerId, b
 
 	int localPlayerId = getHost() ? 0 : 1;
 
+	Log(LOG_INFO) << "[coop-transfer] transferSoldierOwnership '" << soldier->getName() << "' id=" << soldier->getId()
+	              << " newOwner=" << newOwnerId << " localPlayer=" << localPlayerId
+	              << " broadcast=" << (broadcast ? 1 : 0)
+	              << " inBattle=" << (_game->getSavedGame()->getSavedBattle() ? 1 : 0);
+
 	if (_game->getSavedGame()->getSavedBattle())
 	{
 
@@ -820,7 +826,13 @@ void connectionTCP::sendSoldierTransferPacket(Soldier* soldier, int newOwnerId)
 	obj["station_base_id"] = stationBaseId;
 	obj["soldier_yaml"] = writer.emit().yaml;
 
-	sendTCPPacketData(obj.toStyledString());
+	std::string packet = obj.toStyledString();
+
+	Log(LOG_INFO) << "[coop-transfer] SEND soldier '" << soldier->getName() << "' id=" << soldier->getId()
+	              << " newOwner=" << newOwnerId << " stationBaseId=" << stationBaseId
+	              << " packetBytes=" << packet.size();
+
+	sendTCPPacketData(packet);
 
 }
 
@@ -2155,6 +2167,10 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 			int owner = obj["owner"].asInt();
 			int unit_id = obj["unit_id"].asInt();
 
+			Log(LOG_INFO) << "[coop-transfer] RECV transferSoldier id=" << soldier_id << " owner=" << owner
+			              << " hasYaml=" << (obj.isMember("soldier_yaml") ? 1 : 0)
+			              << " inBattle=" << (_game->getSavedGame()->getSavedBattle() ? 1 : 0);
+
 			if (obj.isMember("soldier_yaml"))
 			{
 
@@ -2222,6 +2238,11 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 
 						Base* targetBase = homeBase ? homeBase : firstOwnBase;
 
+						Log(LOG_INFO) << "[coop-transfer] RECV type=" << type << " exists=" << (exists ? 1 : 0)
+						              << " homeBase=" << (homeBase ? homeBase->getName() : "none")
+						              << " targetBase=" << (targetBase ? targetBase->getName() : "NONE")
+						              << " stationBaseId=" << stationBaseId;
+
 						if (!exists && targetBase)
 						{
 
@@ -2281,18 +2302,22 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 								targetBase->base_oldsoldiers2.push_back(soldier);
 							}
 
+							Log(LOG_INFO) << "[coop-transfer] RECV added soldier '" << soldier->getName()
+							              << "' id=" << soldier->getId() << " to base '" << targetBase->getName()
+							              << "' coopBase=" << soldier->getCoopBase();
+
 						}
 
 					}
 					else
 					{
-						DebugLog("transferSoldier: unknown soldier type " + type + "\n");
+						Log(LOG_INFO) << "[coop-transfer] RECV unknown soldier type " << type;
 					}
 
 				}
 				catch (const std::exception& e)
 				{
-					DebugLog(std::string("transferSoldier: failed to load soldier yaml: ") + e.what() + "\n");
+					Log(LOG_INFO) << "[coop-transfer] RECV failed to load soldier yaml: " << e.what();
 				}
 
 			}
