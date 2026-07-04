@@ -50,15 +50,21 @@ TransferSoldierMenu::TransferSoldierMenu(Soldier *soldier, int currentOwnerId) :
 	// One button per player that is not the current owner. Player ids follow
 	// the co-op convention: 0 = host, 1 = client. Built as a list so more
 	// players slot in when the game grows past two.
-	std::vector<std::pair<int, std::string> > targets;
+	//
+	// Name getters are machine-relative, not role-fixed: getHostName() is the
+	// LOCAL player's own name (every machine writes its own name box there)
+	// and getCurrentClientName() is the PEER's name (from received packets).
 	connectionTCP *coop = _game->getCoopMod();
-	if (currentOwnerId != 0)
+	int localPlayerId = coop->getHost() ? 0 : 1;
+
+	std::vector<std::pair<int, std::string> > targets;
+	for (int playerId = 0; playerId <= 1; ++playerId)
 	{
-		targets.push_back(std::make_pair(0, coop->getHostName()));
-	}
-	if (currentOwnerId != 1)
-	{
-		targets.push_back(std::make_pair(1, coop->getCurrentClientName()));
+		if (playerId != currentOwnerId)
+		{
+			std::string name = (playerId == localPlayerId) ? coop->getHostName() : coop->getCurrentClientName();
+			targets.push_back(std::make_pair(playerId, name));
+		}
 	}
 
 	const int btnHeight = 16;

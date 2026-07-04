@@ -30,6 +30,7 @@
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <filesystem>
@@ -499,6 +500,11 @@ class connectionTCP
 	// Soldiers transferred away are parked here instead of deleted: UI states
 	// (sort snapshots, open dialogs) may still hold pointers to them.
 	std::vector<Soldier*> _transferredSoldiers;
+	// Ids of soldiers transferred away this session. A stale copy of one of
+	// these can resurrect when the pre-visit "basehost" snapshot is restored;
+	// the sweep in processPendingSoldierTransfers() parks exactly those (and
+	// nothing else - legacy saves carry unrelated ownerPlayerId values).
+	std::unordered_set<int> _transferredAwaySoldierIds;
 };
 
 }
