@@ -697,6 +697,54 @@ std::string TestServer::execute(const std::string& line)
 				resp["error"] = "soldier not found: " + name;
 			}
 		}
+		else if (cmd == "rename_soldier")
+		{
+			std::string name = req.get("name", "").asString();
+			std::string newName = req.get("newName", "").asString();
+			Soldier* found = nullptr;
+			if (_game->getSavedGame() && !newName.empty())
+			{
+				for (auto* base : *_game->getSavedGame()->getBases())
+				{
+					for (auto* s : *base->getSoldiers())
+					{
+						if (s->getName().find(name) != std::string::npos)
+						{
+							found = s;
+							break;
+						}
+					}
+					if (found) break;
+				}
+			}
+			if (found)
+			{
+				found->setName(newName);
+				resp["ok"] = true;
+			}
+			else
+			{
+				resp["error"] = "soldier not found: " + name;
+			}
+		}
+		else if (cmd == "show_notice")
+		{
+			_game->pushState(new TransferNoticeState(req.get("message", "test notice").asString()));
+			resp["ok"] = true;
+		}
+		else if (cmd == "get_notices")
+		{
+			Json::Value notices(Json::arrayValue);
+			for (auto* s : _game->getStates())
+			{
+				if (auto* n = dynamic_cast<TransferNoticeState*>(s))
+				{
+					notices.append(n->getCategory());
+				}
+			}
+			resp["categories"] = notices;
+			resp["ok"] = true;
+		}
 		else if (cmd == "dismiss_notice")
 		{
 			TransferNoticeState* st = nullptr;
