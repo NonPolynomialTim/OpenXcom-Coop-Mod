@@ -38,6 +38,7 @@
 #include "../Savegame/SavedGame.h"
 #include "../Savegame/Soldier.h"
 #include "../Menu/NewGameState.h"
+#include "../Menu/StartState.h"
 #include "../Geoscape/BuildNewBaseState.h"
 #include "../Geoscape/BaseNameState.h"
 #include "../Basescape/BasescapeState.h"
@@ -204,6 +205,17 @@ void TestServer::pump()
 	if (!_running.load())
 	{
 		return;
+	}
+	// While StartState is on the stack the mod is still being loaded on its
+	// worker thread; executing commands now races it (e.g. GeoscapeState
+	// needs surfaces that modResources() synthesizes at the very end of the
+	// load). Leave commands queued until loading finishes.
+	for (auto* s : _game->getStates())
+	{
+		if (dynamic_cast<StartState*>(s))
+		{
+			return;
+		}
 	}
 	for (;;)
 	{
