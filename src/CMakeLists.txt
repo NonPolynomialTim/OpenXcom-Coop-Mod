@@ -411,6 +411,7 @@ set ( ufopedia_src
   Ufopaedia/ArticleStateCraft.cpp
   Ufopaedia/ArticleStateCraftWeapon.cpp
   Ufopaedia/ArticleStateItem.cpp
+  Ufopaedia/ArticleStateSoldier.cpp
   Ufopaedia/ArticleStateText.cpp
   Ufopaedia/ArticleStateTextImage.cpp
   Ufopaedia/ArticleStateTFTD.cpp
@@ -422,6 +423,7 @@ set ( ufopedia_src
   Ufopaedia/ArticleStateTFTDUso.cpp
   Ufopaedia/ArticleStateTFTDVehicle.cpp
   Ufopaedia/ArticleStateUfo.cpp
+  Ufopaedia/ArticleStateUnit.cpp
   Ufopaedia/ArticleStateVehicle.cpp
   Ufopaedia/StatsForNerdsState.cpp
   Ufopaedia/Ufopaedia.cpp

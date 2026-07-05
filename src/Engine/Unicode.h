@@ -26,9 +26,8 @@ namespace OpenXcom
 
 /**
  * Represents a 32-bit Unicode codepoint.
- * Not technically a character, but close enough for our purposes.
  */
-typedef Uint32 UCode;
+typedef char32_t UCode;
 /**
  * Represents a string where each character
  * is a Unicode codepoint. Used for rendering text.
@@ -42,6 +41,7 @@ typedef std::basic_string<UCode> UString;
 namespace Unicode
 {
 	/* Special text tokens */
+	const char TOK_CUSTOM_FORMAT = 27;		/// special tag for custom text format
 	const char TOK_NL_SMALL = 2;			/// line break and change to small font
 	const char TOK_COLOR_FLIP = 1;			/// alternate between primary and secondary color
 	const unsigned char TOK_NBSP = 0xA0;	/// non-breaking space

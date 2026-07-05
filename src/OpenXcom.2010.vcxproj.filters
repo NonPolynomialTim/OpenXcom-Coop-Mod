@@ -1236,6 +1236,12 @@
       <Filter>CoopMod</Filter>
     </ClCompile>
     <ClCompile Include="CoopMod\CrashHandler.cpp" />
+    <ClCompile Include="Ufopaedia\ArticleStateSoldier.cpp">
+      <Filter>Ufopaedia</Filter>
+    </ClCompile>
+    <ClCompile Include="Ufopaedia\ArticleStateUnit.cpp">
+      <Filter>Ufopaedia</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
@@ -2728,6 +2734,12 @@
       <Filter>CoopMod</Filter>
     </ClInclude>
     <ClInclude Include="CoopMod\CrashHandler.h" />
+    <ClInclude Include="Ufopaedia\ArticleStateSoldier.h">
+      <Filter>Ufopaedia</Filter>
+    </ClInclude>
+    <ClInclude Include="Ufopaedia\ArticleStateUnit.h">
+      <Filter>Ufopaedia</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Geoscape">
