@@ -126,6 +126,13 @@ def make_user_dir(name, saves=()):
         cfg = re.sub(rf"(?m)^(\s*){key}: .*$", rf"\g<1>{key}: {val}", cfg)
     with open(os.path.join(d, "options.cfg"), "w", encoding="utf-8") as f:
         f.write(cfg)
+    # OpenXcom scans user mods inside the -user folder; the isolated dir has
+    # none, so junction the real mods/ tree in (XComFiles etc. live there).
+    real_mods = os.path.join(REAL_USER, "mods")
+    link_mods = os.path.join(d, "mods")
+    if os.path.isdir(real_mods) and not os.path.exists(link_mods):
+        subprocess.run(["cmd", "/c", "mklink", "/J", link_mods, real_mods],
+                       check=True, capture_output=True)
     for save in saves:
         shutil.copy(save, os.path.join(d, "xcom1"))
     return d
