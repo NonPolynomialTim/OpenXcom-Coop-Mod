@@ -20,6 +20,7 @@
 #include "TestServer.h"
 
 #include <cstdlib>
+#include <set>
 #include <typeinfo>
 
 #include <json/json.h>
@@ -30,13 +31,40 @@
 #include "../Engine/Options.h"
 #include "../Engine/State.h"
 #include "../Geoscape/GeoscapeState.h"
+#include "../Geoscape/GeoscapeEventState.h"
+#include "../Geoscape/MonthlyReportState.h"
+#include "../Geoscape/MissionDetectedState.h"
+#include "../Geoscape/ConfirmLandingState.h"
+#include "../Ufopaedia/ArticleState.h"
 #include "../Battlescape/BattlescapeState.h"
+#include "../Battlescape/BattlescapeGame.h"
+#include "../Battlescape/BriefingState.h"
+#include "../Battlescape/InventoryState.h"
+#include "../Battlescape/NextTurnState.h"
+#include "../Battlescape/AbortMissionState.h"
+#include "../Battlescape/DebriefingState.h"
+#include "../Battlescape/Pathfinding.h"
+#include "../Battlescape/UnitWalkBState.h"
+#include "../Battlescape/UnitTurnBState.h"
+#include "../Battlescape/ProjectileFlyBState.h"
+#include "../Battlescape/Position.h"
+#include "../Savegame/BattleItem.h"
+#include "../Mod/RuleItem.h"
+#include "../Mod/Unit.h"
 #include "../Savegame/Base.h"
+#include "../Savegame/BattleUnit.h"
 #include "../Savegame/Country.h"
 #include "../Savegame/Craft.h"
+#include "../Savegame/GameTime.h"
+#include "../Savegame/MissionSite.h"
+#include "../Savegame/ResearchProject.h"
 #include "../Savegame/SavedBattleGame.h"
 #include "../Savegame/SavedGame.h"
 #include "../Savegame/Soldier.h"
+#include "../Savegame/Ufo.h"
+#include "../Mod/RuleCraft.h"
+#include "../Mod/RuleResearch.h"
+#include "../Mod/RuleUfo.h"
 #include "../Menu/NewGameState.h"
 #include "../Menu/StartState.h"
 #include "../Geoscape/BuildNewBaseState.h"
@@ -300,6 +328,423 @@ std::string TestServer::execute(const std::string& line)
 			}
 			resp["states"] = states;
 			resp["ok"] = true;
+		}
+		else if (cmd == "geo_state")
+		{
+			// Read-only geoscape snapshot for the autonomous play driver:
+			// date/funds plus this player's bases, crafts, research, and the
+			// UFOs / mission sites visible on the globe. No coop side effects.
+			SavedGame* sg = _game->getSavedGame();
+			if (!sg)
+			{
+				resp["error"] = "no saved game";
+			}
+			else
+			{
+				GameTime* t = sg->getTime();
+				Json::Value time;
+				time["year"] = t->getYear();
+				time["month"] = t->getMonth();
+				time["day"] = t->getDay();
+				time["hour"] = t->getHour();
+				time["minute"] = t->getMinute();
+				resp["time"] = time;
+				resp["funds"] = Json::Value::Int64(sg->getFunds());
+				resp["monthsPassed"] = sg->getMonthsPassed();
+
+				Json::Value bases(Json::arrayValue);
+				for (auto* b : *sg->getBases())
+				{
+					Json::Value jb;
+					jb["name"] = b->getName(_game->getLanguage());
+					Json::Value crafts(Json::arrayValue);
+					for (auto* c : *b->getCrafts())
+					{
+						Json::Value jc;
+						jc["type"] = c->getRules()->getType();
+						jc["status"] = c->getStatus();
+						crafts.append(jc);
+					}
+					jb["crafts"] = crafts;
+					Json::Value research(Json::arrayValue);
+					for (auto* rp : b->getResearch())
+					{
+						Json::Value jr;
+						jr["name"] = rp->getRules()->getName();
+						jr["spent"] = rp->getSpent();
+						jr["cost"] = rp->getCost();
+						research.append(jr);
+					}
+					jb["research"] = research;
+					jb["soldiers"] = (int)b->getSoldiers()->size();
+					bases.append(jb);
+				}
+				resp["bases"] = bases;
+
+				Json::Value ufos(Json::arrayValue);
+				for (auto* u : *sg->getUfos())
+				{
+					Json::Value ju;
+					ju["id"] = u->getId();
+					ju["type"] = u->getRules()->getType();
+					ju["detected"] = u->getDetected();
+					ju["status"] = (int)u->getStatus();
+					ufos.append(ju);
+				}
+				resp["ufos"] = ufos;
+
+				Json::Value sites(Json::arrayValue);
+				for (auto* ms : *sg->getMissionSites())
+				{
+					Json::Value jm;
+					jm["id"] = ms->getId();
+					jm["type"] = ms->getType();
+					jm["race"] = ms->getAlienRace();
+					jm["city"] = ms->getCity();
+					sites.append(jm);
+				}
+				resp["missionSites"] = sites;
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "geo_set_speed")
+		{
+			// Select a geoscape time-speed (0=5s..5=1day). In coop, time only
+			// advances fast when BOTH players pick the SAME speed; the driver
+			// calls this on host+client together, then lets the real timers run.
+			int idx = req.get("idx", 0).asInt();
+			GeoscapeState* gs = nullptr;
+			for (auto* s : _game->getStates())
+				if (auto* g = dynamic_cast<GeoscapeState*>(s))
+					gs = g;
+			if (!gs)
+				resp["error"] = "no GeoscapeState on stack (in a popup/battle?)";
+			else
+			{
+				gs->setTimeSpeedIndex(idx);
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "craft_dispatch")
+		{
+			// Assign up to N soldiers to the own base's first ready craft and
+			// send it to the mission site with the given id. Geoscape flight +
+			// arrival (ConfirmLandingState) happen as time advances.
+			int siteId = req.get("site_id", -1).asInt();
+			int nsol = req.get("soldiers", 2).asInt();
+			SavedGame* sg = _game->getSavedGame();
+			Base* base = nullptr; Craft* craft = nullptr;
+			if (sg)
+			{
+				for (auto* b : *sg->getBases())
+				{
+					if (!b->getCrafts()->empty() && !b->getSoldiers()->empty())
+					{
+						base = b; craft = b->getCrafts()->front(); break;
+					}
+				}
+			}
+			MissionSite* site = nullptr;
+			if (sg)
+				for (auto* ms : *sg->getMissionSites())
+					if (ms->getId() == siteId) site = ms;
+			if (!craft)
+				resp["error"] = "no base craft with soldiers";
+			else if (!site)
+				resp["error"] = "no mission site id";
+			else
+			{
+				int assigned = 0;
+				for (auto* s : *base->getSoldiers())
+				{
+					if (assigned >= nsol) break;
+					if (s->getCraft() == craft) { assigned++; continue; }
+					if (s->getCraft() == nullptr && craft->getSpaceAvailable() > 0)
+					{
+						s->setCraft(craft);
+						assigned++;
+					}
+				}
+				craft->setDestination(site);
+				resp["assigned"] = assigned;
+				resp["craft"] = craft->getRules()->getType();
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "confirm_landing")
+		{
+			ConfirmLandingState* cl = nullptr;
+			for (auto* s : _game->getStates())
+				if (auto* c = dynamic_cast<ConfirmLandingState*>(s)) cl = c;
+			if (!cl)
+				resp["error"] = "no ConfirmLandingState on stack";
+			else
+			{
+				cl->btnYesClick(nullptr);
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "battle_inventory")
+		{
+			// Pre-battle coop inventory (soldiers spawn unarmed, weapons on the
+			// ground). action=autoequip_all cycles units auto-equipping each from
+			// the ground pile; action=ok closes it and starts the tactical turn.
+			InventoryState* inv = nullptr;
+			for (auto* s : _game->getStates())
+				if (auto* i = dynamic_cast<InventoryState*>(s)) inv = i;
+			if (!inv)
+			{
+				resp["error"] = "no InventoryState on stack";
+			}
+			else
+			{
+				std::string act = req.get("action", "").asString();
+				if (act == "autoequip_all")
+				{
+					int n = req.get("times", 8).asInt();
+					for (int i = 0; i < n; i++)
+					{
+						inv->onAutoequip(nullptr);
+						inv->btnNextClick(nullptr);
+					}
+					resp["ok"] = true;
+				}
+				else if (act == "ok")
+				{
+					inv->btnOkClick(nullptr);
+					resp["ok"] = true;
+				}
+				else
+					resp["error"] = "unknown inventory action";
+			}
+		}
+		else if (cmd == "close_briefing")
+		{
+			BriefingState* br = nullptr;
+			for (auto* s : _game->getStates())
+				if (auto* b = dynamic_cast<BriefingState*>(s)) br = b;
+			if (!br)
+				resp["error"] = "no BriefingState on stack";
+			else
+			{
+				br->btnOkClick(nullptr);
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "battle_state")
+		{
+			SavedGame* sg = _game->getSavedGame();
+			SavedBattleGame* bg = sg ? sg->getSavedBattle() : nullptr;
+			if (!bg)
+			{
+				resp["inBattle"] = false;
+				resp["ok"] = true;
+			}
+			else
+			{
+				resp["inBattle"] = true;
+				resp["turn"] = bg->getTurn();
+				resp["side"] = (int)bg->getSide();
+				resp["missionType"] = bg->getMissionType();
+				resp["coopTurn"] = BattlescapeGame::isYourTurn;  // 2 = my active turn
+				const BattleUnit* sel = bg->getSelectedUnit();
+				resp["selectedId"] = sel ? sel->getId() : -1;
+				Json::Value units(Json::arrayValue);
+				for (auto* u : *bg->getUnits())
+				{
+					Json::Value ju;
+					ju["id"] = u->getId();
+					ju["faction"] = (int)u->getFaction();
+					ju["status"] = (int)u->getStatus();
+					ju["isOut"] = u->isOut();
+					ju["health"] = u->getHealth();
+					ju["tu"] = u->getTimeUnits();
+					ju["stun"] = u->getStunlevel();
+					ju["name"] = u->getName(_game->getLanguage());
+					ju["isPlayerSoldier"] = (u->getGeoscapeSoldier() != nullptr);
+					BattleItem* w = u->getMainHandWeapon(false);
+					ju["weapon"] = w ? w->getRules()->getType() : "";
+					// kill attribution (for coop outcome cross-validation)
+					ju["murdererId"] = u->getMurdererId();
+					ju["killedBy"] = (int)u->killedBy();
+					Position p = u->getPosition();
+					ju["x"] = p.x; ju["y"] = p.y; ju["z"] = p.z;
+					units.append(ju);
+				}
+				resp["units"] = units;
+				// Spotted hostiles: union of what all player units currently see.
+				// The tactical driver targets only these (no omniscient wall-shots).
+				std::set<int> spotted;
+				for (auto* u : *bg->getUnits())
+				{
+					if (u->getFaction() != FACTION_PLAYER || u->isOut()) continue;
+					for (auto* v : *u->getVisibleUnits())
+						if (v->getFaction() == FACTION_HOSTILE) spotted.insert(v->getId());
+				}
+				Json::Value sp(Json::arrayValue);
+				for (int id : spotted) sp.append(id);
+				resp["spotted"] = sp;
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "battle_action")
+		{
+			// Unified battlescape action driver. action = select|move|shoot|
+			// end_turn|abort. Reaches the BattlescapeGame via the top
+			// BattlescapeState. All ops are on the main thread (race-free).
+			BattlescapeGame* bg = nullptr;
+			BattlescapeState* bstate = nullptr;
+			for (auto* s : _game->getStates())
+				if (auto* bs = dynamic_cast<BattlescapeState*>(s)) { bstate = bs; bg = bs->getBattleGame(); }
+			SavedBattleGame* sbg = bg ? bg->getSave() : nullptr;
+			std::string act = req.get("action", "").asString();
+			if (!bg || !sbg)
+			{
+				resp["error"] = "not in battlescape";
+			}
+			else if (act == "end_turn")
+			{
+				bg->requestEndTurn(false);
+				resp["ok"] = true;
+			}
+			else if (act == "abort")
+			{
+				// Proper abort: open the confirm dialog (AbortMissionState). The
+				// driver then confirms it via dismiss_popup -> btnOkClick ->
+				// finishBattle (recovers living units in the exit/craft zone).
+				// (setAborted+requestEndTurn alone never ends the mission.)
+				if (bstate)
+				{
+					bstate->btnAbortClick(nullptr);
+					resp["ok"] = true;
+				}
+				else
+					resp["error"] = "no BattlescapeState";
+			}
+			else
+			{
+				// actions needing a unit
+				int uid = req.get("unit", -1).asInt();
+				BattleUnit* unit = nullptr;
+				for (auto* u : *sbg->getUnits())
+					if (u->getId() == uid) unit = u;
+				if (!unit)
+					resp["error"] = "no unit id";
+				else if (act == "select")
+				{
+					sbg->setSelectedUnit(unit);
+					resp["ok"] = true;
+				}
+				else if (act == "move")
+				{
+					Position dest(req.get("x", 0).asInt(), req.get("y", 0).asInt(), req.get("z", 0).asInt());
+					sbg->setSelectedUnit(unit);
+					BattleAction* a = bg->getCurrentAction();
+					a->actor = unit; a->target = dest; a->type = BA_WALK;
+					a->targeting = false; a->run = false; a->strafe = false;
+					bg->getPathfinding()->calculate(a->actor, a->target, a->getMoveType());
+					if (bg->getPathfinding()->getStartDirection() == -1)
+						resp["error"] = "no path to target";
+					else
+					{
+						bg->statePushBack(new UnitWalkBState(bg, *a));
+						resp["ok"] = true;
+					}
+				}
+				else if (act == "shoot")
+				{
+					int tid = req.get("target", -1).asInt();
+					BattleUnit* tgt = nullptr;
+					for (auto* u : *sbg->getUnits())
+						if (u->getId() == tid) tgt = u;
+					BattleItem* w = unit->getMainHandWeapon(false);
+					if (!tgt)
+						resp["error"] = "no target id";
+					else if (!w)
+						resp["error"] = "actor has no weapon in hand";
+					else
+					{
+						std::string mode = req.get("mode", "snap").asString();
+						BattleActionType bt = BA_SNAPSHOT;
+						if (mode == "aimed") bt = BA_AIMEDSHOT;
+						else if (mode == "auto") bt = BA_AUTOSHOT;
+						sbg->setSelectedUnit(unit);
+						BattleAction* a = bg->getCurrentAction();
+						a->actor = unit; a->weapon = w; a->type = bt;
+						a->targeting = true; a->target = tgt->getPosition();
+						a->updateTU();
+						resp["tuCost"] = a->Time;
+						resp["tuHave"] = unit->getTimeUnits();
+						bg->statePushBack(new UnitTurnBState(bg, *a));
+						bg->statePushBack(new ProjectileFlyBState(bg, *a));
+						resp["ok"] = true;
+					}
+				}
+				else
+					resp["error"] = "unknown battle action";
+			}
+		}
+		else if (cmd == "dismiss_popup")
+		{
+			// Confirm/close the top geoscape popup (event intro, etc.). Handled
+			// types grow as the play driver discovers them. Reports the type so
+			// unknown popups surface instead of silently hanging.
+			State* top = _game->getStates().empty() ? nullptr : _game->getStates().back();
+			resp["type"] = top ? typeid(*top).name() : "none";
+			if (auto* ev = dynamic_cast<GeoscapeEventState*>(top))
+			{
+				ev->btnOkClick(nullptr);
+				resp["handled"] = "GeoscapeEventState";
+				resp["ok"] = true;
+			}
+			else if (dynamic_cast<ArticleState*>(top))
+			{
+				// Ufopaedia article (event reward / intro) — read-only display,
+				// btnOkClick is protected, so just pop it (same effect: return
+				// to the state underneath, ultimately the geoscape).
+				_game->popState();
+				resp["handled"] = "ArticleState";
+				resp["ok"] = true;
+			}
+			else if (auto* mr = dynamic_cast<MonthlyReportState*>(top))
+			{
+				mr->btnOkClick(nullptr);
+				resp["handled"] = "MonthlyReportState";
+				resp["ok"] = true;
+			}
+			else if (auto* md = dynamic_cast<MissionDetectedState*>(top))
+			{
+				// New mission-site alert. Default action = skip (cancel); the
+				// site stays on the globe. The play driver decides per site type
+				// whether to instead dispatch a craft (engage) separately.
+				md->btnCancelClick(nullptr);
+				resp["handled"] = "MissionDetectedState";
+				resp["ok"] = true;
+			}
+			else if (dynamic_cast<NextTurnState*>(top))
+			{
+				// Transient "Turn N" screen — the turn already advanced when it
+				// was created; just pop it to reach the tactical map.
+				_game->popState();
+				resp["handled"] = "NextTurnState";
+				resp["ok"] = true;
+			}
+			else if (auto* ab = dynamic_cast<AbortMissionState*>(top))
+			{
+				ab->btnOkClick(nullptr);
+				resp["handled"] = "AbortMissionState";
+				resp["ok"] = true;
+			}
+			else if (auto* db = dynamic_cast<DebriefingState*>(top))
+			{
+				db->btnOkClick(nullptr);
+				resp["handled"] = "DebriefingState";
+				resp["ok"] = true;
+			}
+			else
+			{
+				resp["error"] = "unhandled popup type";
+			}
 		}
 		else if (cmd == "get_coop")
 		{
