@@ -145,6 +145,7 @@ set ( coopmod_src
   CoopMod/TestServer.cpp
   CoopMod/TransferNoticeState.cpp
   CoopMod/TransferSoldierMenu.cpp
+  CoopMod/connectionP2P/p2p_config.cpp
 )
 
 set ( engine_src
