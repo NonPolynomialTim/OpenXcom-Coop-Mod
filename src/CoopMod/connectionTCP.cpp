@@ -4283,6 +4283,13 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 
 						unit->setHealth(health);
 						unit->setStunlevelCoop(stunlevel);
+						// coop: apply the host's kill attribution so the client
+						// credits the same murderer/faction (fixes kill-credit desync).
+						if (obj.isMember("murdererId"))
+						{
+							unit->setMurdererId(obj["murdererId"].asInt());
+							unit->killedBy((UnitFaction)obj["killedBy"].asInt());
+						}
 						break;
 
 					}
@@ -4328,6 +4335,26 @@ void connectionTCP::onTCPMessage(std::string stateString, Json::Value obj)
 			}
 		}
 
+	}
+
+	// coop: authoritative post-death kill attribution (murderer + killedBy) from
+	// the host's checkForCasualties. Corrects the stale killedBy the mid-hit
+	// hit_unit packet carried, so the client credits the same killer/faction.
+	if (stateString == "kill_attrib")
+	{
+		if (_game->getSavedGame() && _game->getSavedGame()->getSavedBattle())
+		{
+			int unit_id = obj["unit_id"].asInt();
+			for (auto& unit : *_game->getSavedGame()->getSavedBattle()->getUnits())
+			{
+				if (unit->getId() == unit_id)
+				{
+					unit->setMurdererId(obj["murdererId"].asInt());
+					unit->killedBy((UnitFaction)obj["killedBy"].asInt());
+					break;
+				}
+			}
+		}
 	}
 
 	// RANDOM SEED

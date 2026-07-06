@@ -3320,6 +3320,10 @@ bool TileEngine::hitUnit(BattleActionAttack attack, BattleUnit *target, const Po
 			root["unit_id"] = target->getId();
 			root["health"] = target->getHealth();
 			root["stunlevel"] = target->getStunlevel();
+			// coop: replicate kill attribution too, else the client credits the
+			// kill to the wrong unit/faction (murderer 0 / killedBy HOSTILE).
+			root["murdererId"] = target->getMurdererId();
+			root["killedBy"] = (int)target->killedBy();
 
 			Json::Value fatalArray(Json::arrayValue);
 			for (int i = 0; i < BODYPART_MAX; ++i)

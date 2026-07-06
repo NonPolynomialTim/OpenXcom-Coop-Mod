@@ -1671,6 +1671,21 @@ void BattlescapeGame::checkForCasualties(const RuleDamageType *damageType, Battl
 					}
 				}
 
+				// coop: replicate the FINALIZED kill attribution (murderer +
+				// killedBy faction) to the peer. checkForCasualties has just
+				// assigned them; the earlier TileEngine hit_unit packet fires
+				// mid-hit and carries a stale killedBy, so this authoritative
+				// post-death sync corrects the client's kill credit.
+				if (getCoopMod()->getCoopStatic() == true && getCoopMod()->getHost() == true)
+				{
+					Json::Value killAttrib;
+					killAttrib["state"] = "kill_attrib";
+					killAttrib["unit_id"] = victim->getId();
+					killAttrib["murdererId"] = victim->getMurdererId();
+					killAttrib["killedBy"] = (int)victim->killedBy();
+					getCoopMod()->sendTCPPacketData(killAttrib.toStyledString());
+				}
+
 				if (victim->getFaction() != FACTION_NEUTRAL)
 				{
 					int modifier = _save->getUnitMoraleModifier(victim);
