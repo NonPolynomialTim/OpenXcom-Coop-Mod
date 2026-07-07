@@ -54,12 +54,13 @@ void DisableableComboBox::setDisabledColor(Uint8 color)
 }
 
 /**
- * Sets the color of the closed combobox button text.
+ * Sets the label color of the closed combobox button, leaving the button face
+ * color unchanged.
  * @param color Palette index.
  */
-void DisableableComboBox::setButtonColor(Uint8 color)
+void DisableableComboBox::setButtonTextColor(Uint8 color)
 {
-	_button->setColor(color);
+	_button->setTextColor(color);
 }
 
 /**

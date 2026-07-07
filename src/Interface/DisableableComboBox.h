@@ -41,9 +41,10 @@ public:
 	~DisableableComboBox();
 	/// Sets the color used to dim disabled options (0 = leave default color).
 	void setDisabledColor(Uint8 color);
-	/// Sets the color of the (closed) combobox button text, e.g. to dim it when
-	/// the current selection is disabled/offline.
-	void setButtonColor(Uint8 color);
+	/// Sets the label color of the (closed) combobox button, leaving the button
+	/// face color unchanged. Used to dim the text when the current selection is
+	/// disabled/offline.
+	void setButtonTextColor(Uint8 color);
 	/// Sets the list of options together with a per-option enabled mask.
 	void setOptions(const std::vector<std::string> &options, const std::vector<bool> &enabled, bool translate = false);
 	/// Returns whether the option at the given index is enabled (selectable).

@@ -1402,9 +1402,10 @@ void ServerList::updateOfflineWarning()
 	size_t active = getActiveRendezvousServer();
 	bool offline = (active < _serverStatus.size()) && (_serverStatus[active] == 2);
 
-	// Dim the closed combobox button text when the current selection is offline.
+	// Dim the closed combobox label text (only) when the current selection is
+	// offline; the button face keeps its default color.
 	if (_cbxServer)
-		_cbxServer->setButtonColor(offline ? _serverComboDisabledColor : _serverComboColor);
+		_cbxServer->setButtonTextColor(offline ? _serverComboDisabledColor : _serverComboColor);
 
 	if (offline)
 	{
