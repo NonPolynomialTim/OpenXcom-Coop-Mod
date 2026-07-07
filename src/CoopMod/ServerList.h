@@ -54,6 +54,7 @@ protected:
 	// Per-configured-server probe status: 0 = waiting, 1 = online, 2 = offline.
 	std::vector<int> _serverStatus;
 	bool _probesStarted;
+	Uint8 _serverComboColor, _serverComboDisabledColor;
 	OptionsOrigin _origin;
 	std::vector<ServerInfo> _servers;
 	// selected

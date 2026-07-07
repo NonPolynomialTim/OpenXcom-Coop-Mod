@@ -18,6 +18,7 @@
  */
 #include "DisableableComboBox.h"
 #include "TextList.h"
+#include "TextButton.h"
 
 namespace OpenXcom
 {
@@ -50,6 +51,15 @@ DisableableComboBox::~DisableableComboBox()
 void DisableableComboBox::setDisabledColor(Uint8 color)
 {
 	_disabledColor = color;
+}
+
+/**
+ * Sets the color of the closed combobox button text.
+ * @param color Palette index.
+ */
+void DisableableComboBox::setButtonColor(Uint8 color)
+{
+	_button->setColor(color);
 }
 
 /**

@@ -364,7 +364,7 @@ ServerList::ServerList() : _sortable(true)
 		_probesStarted = false;
 
 		// Offline warning, hidden until the active server is known unreachable.
-		_txtOfflineWarning = new Text(298, 17, 8, 60);
+		_txtOfflineWarning = new Text(298, 25, 8, 60);
 		add(_txtOfflineWarning, "text", "saveMenus");
 		_txtOfflineWarning->setColor(color);
 		_txtOfflineWarning->setAlign(ALIGN_CENTER);
@@ -380,6 +380,8 @@ ServerList::ServerList() : _sortable(true)
 			if (const Element* el = rule->getElement("disabledUserOption"))
 				disabledColor = el->color;
 		}
+		_serverComboColor = color;
+		_serverComboDisabledColor = disabledColor;
 
 		// Added LAST so its dropdown draws above every other widget.
 		_cbxServer = new DisableableComboBox(this, 104, 16, 210, 6);
@@ -1400,9 +1402,13 @@ void ServerList::updateOfflineWarning()
 	size_t active = getActiveRendezvousServer();
 	bool offline = (active < _serverStatus.size()) && (_serverStatus[active] == 2);
 
+	// Dim the closed combobox button text when the current selection is offline.
+	if (_cbxServer)
+		_cbxServer->setButtonColor(offline ? _serverComboDisabledColor : _serverComboColor);
+
 	if (offline)
 	{
-		_txtOfflineWarning->setText("Selected rendezvous server is offline. Pick another from the list.");
+		_txtOfflineWarning->setText("Selected rendezvous server is offline. Pick another from the list or direct connect with TCP.");
 		_txtOfflineWarning->setVisible(true);
 		_servers.erase(
 			std::remove_if(_servers.begin(), _servers.end(),
