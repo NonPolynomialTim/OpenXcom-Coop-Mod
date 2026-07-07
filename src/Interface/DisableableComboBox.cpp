@@ -67,6 +67,8 @@ void DisableableComboBox::setOptions(const std::vector<std::string> &options, co
 	for (size_t i = 0; i < options.size() && i < enabled.size(); ++i)
 		_enabled[i] = enabled[i];
 
+	_labels = options;
+
 	ComboBox::setOptions(options, translate);
 
 	if (_disabledColor != 0)
@@ -88,6 +90,18 @@ bool DisableableComboBox::isEnabled(size_t idx) const
 	if (idx < _enabled.size())
 		return _enabled[idx];
 	return true;
+}
+
+size_t DisableableComboBox::getOptionCount() const
+{
+	return _labels.size();
+}
+
+std::string DisableableComboBox::getOptionLabel(size_t idx) const
+{
+	if (idx < _labels.size())
+		return _labels[idx];
+	return std::string();
 }
 
 /**

@@ -115,6 +115,20 @@ Battlescape (added 2026-07-05):
     the mission — `setAborted(true)+requestEndTurn` alone never calls
     `finishBattle` and loops forever.
 
+Menu / rendezvous combobox (added 2026-07-07):
+
+- `open_server_browser` — push the coop `ServerList` state (needs a SavedGame;
+  bootstrap via `open_new_game`/`newgame_ok`/`place_first_base` first).
+- `server_combo` — dump the rendezvous-server `DisableableComboBox`:
+  `{visible, selected, options[{label, enabled}]}`. Offline servers read
+  `"<name> (offline)"` with `enabled=false`; still-probing ones read
+  `"<name> (Wait...)"`. Poll until no label contains `(Wait...)`.
+- `screenshot {path}` — save the current frame to a PNG (`Screen::screenshot`)
+  for visual inspection; works even on a minimized test window.
+- Driver: `tools/coop_test/test_server_browser.py` — one instance, opens the
+  browser, waits for probes, asserts combobox visibility + an offline/disabled
+  server, and saves `server_browser.png`.
+
 Add commands by extending `TestServer::execute`.
 
 ## Autonomous play driver — `tools/coop_test/play_harness.py`

@@ -72,6 +72,9 @@
 #include "LobbyMenu.h"
 #include "Profile.h"
 #include "connectionTCP.h"
+#include "ServerList.h"
+#include "../Interface/DisableableComboBox.h"
+#include "../Engine/Screen.h"
 
 namespace OpenXcom
 {
@@ -323,6 +326,71 @@ std::string TestServer::execute(const std::string& line)
 			}
 			resp["states"] = states;
 			resp["ok"] = true;
+		}
+		else if (cmd == "open_server_browser")
+		{
+			// Push the coop Server Browser so its rendezvous-server combobox can
+			// be inspected. Requires a SavedGame (the ctor reads getCountries());
+			// drivers bootstrap one via open_new_game/place_first_base first.
+			if (!_game->getSavedGame())
+			{
+				resp["ok"] = false;
+				resp["error"] = "no SavedGame; bootstrap a game before opening the browser";
+			}
+			else
+			{
+				_game->pushState(new ServerList());
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "server_combo")
+		{
+			// Dump the rendezvous-server combobox state for assertions.
+			ServerList* browser = nullptr;
+			for (auto* s : _game->getStates())
+			{
+				if (auto* sl = dynamic_cast<ServerList*>(s))
+					browser = sl;
+			}
+
+			if (!browser)
+			{
+				resp["ok"] = false;
+				resp["error"] = "ServerList not on the state stack";
+			}
+			else
+			{
+				DisableableComboBox* combo = browser->getServerCombo();
+				resp["visible"] = combo->getVisible();
+				resp["selected"] = static_cast<Json::UInt>(combo->getSelected());
+
+				Json::Value options(Json::arrayValue);
+				for (size_t i = 0; i < combo->getOptionCount(); ++i)
+				{
+					Json::Value o;
+					o["label"] = combo->getOptionLabel(i);
+					o["enabled"] = combo->isEnabled(i);
+					options.append(o);
+				}
+				resp["options"] = options;
+				resp["ok"] = true;
+			}
+		}
+		else if (cmd == "screenshot")
+		{
+			// Save the current frame to a PNG for visual inspection.
+			std::string path = req.get("path", "").asString();
+			if (path.empty())
+			{
+				resp["ok"] = false;
+				resp["error"] = "screenshot requires a path";
+			}
+			else
+			{
+				_game->getScreen()->screenshot(path);
+				resp["ok"] = true;
+				resp["path"] = path;
+			}
 		}
 		else if (cmd == "geo_state")
 		{

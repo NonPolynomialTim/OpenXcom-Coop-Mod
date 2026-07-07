@@ -300,7 +300,9 @@ ServerList::ServerList() : _sortable(true)
 	_btnCancel->onKeyboardPress((ActionHandler)&ServerList::btnCancelClick, Options::keyCancel);
 
 	_txtTitle->setBig();
-	_txtTitle->setAlign(ALIGN_CENTER);
+	// Left-aligned so the header clears the rendezvous-server combobox that
+	// sits in the top-right corner.
+	_txtTitle->setAlign(ALIGN_LEFT);
 	_txtTitle->setText("SERVER BROWSER");
 
 	if (isMobile)
