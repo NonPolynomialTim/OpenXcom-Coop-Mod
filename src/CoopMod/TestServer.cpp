@@ -376,6 +376,27 @@ std::string TestServer::execute(const std::string& line)
 				resp["ok"] = true;
 			}
 		}
+		else if (cmd == "combo_open")
+		{
+			// Open the rendezvous-server dropdown so the disabled/greyed rows are
+			// visible for a screenshot.
+			ServerList* browser = nullptr;
+			for (auto* s : _game->getStates())
+			{
+				if (auto* sl = dynamic_cast<ServerList*>(s))
+					browser = sl;
+			}
+			if (!browser)
+			{
+				resp["ok"] = false;
+				resp["error"] = "ServerList not on the state stack";
+			}
+			else
+			{
+				browser->getServerCombo()->toggle(false, false);
+				resp["ok"] = true;
+			}
+		}
 		else if (cmd == "screenshot")
 		{
 			// Save the current frame to a PNG for visual inspection.

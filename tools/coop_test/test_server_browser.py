@@ -22,6 +22,7 @@ from harness import GameClient, make_user_dir
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHOT = os.path.join(HERE, "server_browser.png")
+SHOT_OPEN = os.path.join(HERE, "server_browser_dropdown.png")
 
 
 def main():
@@ -57,9 +58,16 @@ def main():
     for i, o in enumerate(r["options"]):
         print(f"  [{i}] {'ENABLED ' if o['enabled'] else 'disabled'} {o['label']!r}")
 
-    # Save a screenshot for visual inspection of the widget.
+    # Save a screenshot for visual inspection of the widget (closed).
     g.ok({"cmd": "screenshot", "path": SHOT})
     print(f"screenshot -> {SHOT}")
+
+    # Open the dropdown and screenshot it so the greyed/disabled offline row is
+    # visible.
+    g.ok({"cmd": "combo_open"})
+    time.sleep(0.5)
+    g.ok({"cmd": "screenshot", "path": SHOT_OPEN})
+    print(f"screenshot -> {SHOT_OPEN}")
 
     # Basic assertions.
     labels = [o["label"] for o in r["options"]]

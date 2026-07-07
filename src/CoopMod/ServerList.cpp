@@ -28,6 +28,7 @@
 #include "../Engine/Options.h"
 #include "../Engine/Unicode.h"
 #include "../Mod/Mod.h"
+#include "../Mod/RuleInterface.h"
 #include "../Engine/LocalizedText.h"
 #include "../Interface/TextButton.h"
 #include "../Interface/Window.h"
@@ -370,8 +371,15 @@ ServerList::ServerList() : _sortable(true)
 		_txtOfflineWarning->setWordWrap(true);
 		_txtOfflineWarning->setVisible(false);
 
-		// Dimmed shade in the same 16-color palette block for disabled rows.
-		Uint8 disabledColor = (Uint8)((color & 0xF0) | std::min(15, (color & 0x0F) + 5));
+		// Palette-correct greyed color for disabled (offline) rows, matching the
+		// coop mod's OptionsMultiplayer "disabledUserOption" convention.
+		bool inBattle = _game->getSavedGame() && _game->getSavedGame()->getSavedBattle();
+		Uint8 disabledColor = color;
+		if (RuleInterface* rule = _game->getMod()->getInterface(inBattle ? "battlescape" : "advancedMenu"))
+		{
+			if (const Element* el = rule->getElement("disabledUserOption"))
+				disabledColor = el->color;
+		}
 
 		// Added LAST so its dropdown draws above every other widget.
 		_cbxServer = new DisableableComboBox(this, 104, 16, 210, 6);
