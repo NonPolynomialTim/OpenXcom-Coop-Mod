@@ -1,6 +1,7 @@
 #pragma once
 /*
  * Copyright 2010-2016 OpenXcom Developers.
+ * Copyright 2023-2026 XComCoopTeam (https://www.moddb.com/mods/openxcom-coop-mod)
  *
  * This file is part of OpenXcom.
  *
@@ -18,45 +19,34 @@
  * along with OpenXcom.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "../Engine/State.h"
-#include "Globe.h"
+#include <string>
 
 namespace OpenXcom
 {
 
-class Base;
 class Window;
 class Text;
-class TextEdit;
 class TextButton;
-class Globe;
 
 /**
- * Window used to input a name for a new base.
- * Player's first Base uses this screen
- * additional bases use ConfirmNewBaseState
+ * Small co-op notification popup ("X transferred ownership of Y to you...").
+ * Adopts the palette of the state it is pushed over, so it can appear on any
+ * screen (geoscape, basescape, peer-base view) without a palette flash. As a
+ * side effect, closing it re-inits the state below, refreshing soldier lists.
  */
-class BaseNameState : public State
+class TransferNoticeState : public State
 {
 private:
-	Base *_base;
-	Globe *_globe;
 	Window *_window;
-	Text *_txtTitle;
-	TextEdit *_edtName;
+	Text *_txtMessage;
 	TextButton *_btnOk;
-	bool _first;
-	bool _fixedLocation;
+	std::string _category;
+
 public:
-	/// Creates the Base Name state.
-	BaseNameState(Base *base, Globe *globe, bool first, bool fixedLocation);
-	/// Cleans up the Base Name state.
-	~BaseNameState();
-	/// Handler for clicking the OK button.
+	TransferNoticeState(const std::string &message);
 	void btnOkClick(Action *action);
-	/// Handler for changing text on the Name edit.
-	void edtNameChange(Action *action);
-	/// Sets the name and confirms (test automation).
-	void setNameAndConfirm(const std::string &name);
+	/// Interface category the widgets were themed with (test introspection).
+	const std::string &getCategory() const { return _category; }
 };
 
 }

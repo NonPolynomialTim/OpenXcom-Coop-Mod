@@ -87,3 +87,4 @@ rendezvous.json
 # Per-user last-selected rendezvous server
 rendezvous_selection.json
 
+__pycache__/

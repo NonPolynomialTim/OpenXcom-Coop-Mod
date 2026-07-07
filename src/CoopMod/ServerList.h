@@ -65,6 +65,8 @@ protected:
 	std::string selectedManualServers = "ANY SERVER";
 	unsigned int _firstValidRow = 0;
 	bool _sortable;
+	// Shows the "master server unavailable" notice at most once per browser session.
+	bool _masterServerWarningShown = false;
 	void updateArrows();
 	void updateServerList();
 	void loadServersFromJson();

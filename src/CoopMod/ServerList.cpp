@@ -1239,6 +1239,16 @@ void ServerList::think()
 		}
 	}
 
+	// A background refresh that found no master-server config flags it via
+	// consumeMasterServerUnavailableWarning() instead of forcing a fatal error.
+	// Show a non-fatal notice once; the browser stays open so the player can
+	// still use Direct Connect / Host.
+	if (!_masterServerWarningShown && consumeMasterServerUnavailableWarning())
+	{
+		_masterServerWarningShown = true;
+		_game->pushState(new CoopState(446));
+	}
+
 	// Handle completed async server-list refresh on the main thread.
 	bool hasPending = false;
 	bool ok = false;

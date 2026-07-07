@@ -40,6 +40,12 @@ void probeAllRendezvousServersAsync(uint32_t timeoutMs, RendezvousProbeCallback 
 // TCP-only disconnects use this to avoid closing stale rendezvous state.
 bool isRendezvousConnectionActive();
 
+// True once after a server-list refresh failed because the built-in rendezvous
+// keys / master-server config are missing in this build. Consumed by the Server
+// Browser (main thread) to show a non-fatal notice without dropping the browser,
+// so Direct Connect / Host stay usable.
+bool consumeMasterServerUnavailableWarning();
+
 // -----------------------------------------------------------------------------
 // Short UI-facing API.
 // Uses rendezvous_config.cpp for host, ports, game version and public keys.

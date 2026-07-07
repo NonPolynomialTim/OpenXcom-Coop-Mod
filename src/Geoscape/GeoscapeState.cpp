@@ -896,6 +896,13 @@ void GeoscapeState::init()
 
 	}
 
+	// coop: complete queued in-battle soldier transfers before the cleanup
+	// below deletes other-player soldiers (the queue still references them).
+	if (_game->getCoopMod()->coopMissionEnd == true)
+	{
+		_game->getCoopMod()->processPendingSoldierTransfers();
+	}
+
 	// HOST AFTER THE BATTLE
 	// Make sure the other player's units aren't saved in single-player mode.
 	if ((_game->getCoopMod()->getHost() == true || _game->getCoopMod()->getCoopStatic() == false) && _game->getCoopMod()->coopMissionEnd == true)
@@ -917,7 +924,13 @@ void GeoscapeState::init()
 
 				}
 
-				if (soldier->getCoop() != 0)
+				// coop: permanently transferred soldiers (explicit owner +
+				// stationed here via coopBase) live in this save and must
+				// survive - only the battle-merged copies of the other
+				// player's own soldiers get cleaned up.
+				bool transferredGuest = (soldier->getOwnerPlayerId() != 999 && soldier->getCoopBase() != -1);
+
+				if (soldier->getCoop() != 0 && !transferredGuest)
 				{
 					delete soldier;           // Freeing the soldier object from memory
 					it = soldiers->erase(it); // Remove the pointer from the vector and move to the next one
@@ -6145,6 +6158,23 @@ void GeoscapeState::btnTimerClick(Action *action)
 	ev.button.button = SDL_BUTTON_LEFT;
 	Action a = Action(&ev, 0.0, 0.0, 0, 0);
 	action->getSender()->mousePress(&a, this);
+}
+
+/**
+ * Selects a time-speed button programmatically (test harness). Mirrors a real
+ * click on the button so the radio group + redraw + coop speed broadcast (via
+ * think()) all behave exactly as a user click would.
+ */
+void GeoscapeState::setTimeSpeedIndex(int idx)
+{
+	TextButton* btns[6] = {_btn5Secs, _btn1Min, _btn5Mins, _btn30Mins, _btn1Hour, _btn1Day};
+	if (idx < 0 || idx > 5)
+		return;
+	SDL_Event ev;
+	ev.type = SDL_MOUSEBUTTONDOWN;
+	ev.button.button = SDL_BUTTON_LEFT;
+	Action a = Action(&ev, 0.0, 0.0, 0, 0);
+	btns[idx]->mousePress(&a, this);
 }
 
 /**
