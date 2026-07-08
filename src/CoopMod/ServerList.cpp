@@ -185,7 +185,7 @@ ServerList::ServerList() : _sortable(true)
 
 	//_btnCancel = new TextButton(80, 16, 120, 172);
 
-	_txtTitle = new Text(310, 17, 5, 7);
+	_txtTitle = new Text(310, 17, 8, 7);
 	_txtJoin = new Text(310, 9, 5, 23);
 	_txtName = new Text(115, 9, 16, isMobile ? 40 : 32);
 	_txtPlayers = new Text(50, 9, 126, isMobile ? 40 : 32); 
