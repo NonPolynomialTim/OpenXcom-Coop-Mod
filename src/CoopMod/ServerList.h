@@ -81,6 +81,7 @@ protected:
 	void startServerProbes();
 	void rebuildServerCombo();
 	void updateOfflineWarning();
+	void updateFetchingAnimation();
 	std::string selectionFilePath();
 	std::string loadSavedServerName();
 	void saveSelectedServerName(const std::string& name);

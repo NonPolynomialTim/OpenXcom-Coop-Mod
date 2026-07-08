@@ -23,6 +23,7 @@ from harness import GameClient, make_user_dir
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHOT = os.path.join(HERE, "server_browser.png")
 SHOT_OPEN = os.path.join(HERE, "server_browser_dropdown.png")
+SHOT_FETCH = os.path.join(HERE, "server_browser_fetching.png")
 
 
 def main():
@@ -40,6 +41,12 @@ def main():
 
     # Open the coop Server Browser.
     g.ok({"cmd": "open_server_browser"})
+
+    # Capture the "Fetching server list ..." animation while the selected
+    # server's probe is still pending.
+    time.sleep(0.6)
+    g.ok({"cmd": "screenshot", "path": SHOT_FETCH})
+    print(f"screenshot -> {SHOT_FETCH}")
 
     # Wait for the parallel probes (2500ms timeout each) to resolve: no option
     # should still read "(Wait...)".

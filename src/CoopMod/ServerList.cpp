@@ -1251,6 +1251,9 @@ void ServerList::think()
 		}
 	}
 
+	// Animate "Fetching server list . . ." while the selected server is probing.
+	updateFetchingAnimation();
+
 	// A background refresh that found no master-server config flags it via
 	// consumeMasterServerUnavailableWarning() instead of forcing a fatal error.
 	// Show a non-fatal notice once; the browser stays open so the player can
@@ -1400,7 +1403,8 @@ void ServerList::updateOfflineWarning()
 		return;
 
 	size_t active = getActiveRendezvousServer();
-	bool offline = (active < _serverStatus.size()) && (_serverStatus[active] == 2);
+	int status = (active < _serverStatus.size()) ? _serverStatus[active] : 1;
+	bool offline = (status == 2);
 
 	// Dim the closed combobox label text (only) when the current selection is
 	// offline; the button face keeps its default color.
@@ -1418,10 +1422,34 @@ void ServerList::updateOfflineWarning()
 		_lstServers->clearList();
 		sortList(Options::serverOrder);
 	}
-	else
+	else if (status == 1)
 	{
+		// Online: nothing to warn about.
 		_txtOfflineWarning->setVisible(false);
 	}
+	// status == 0 (still probing): leave the textbox to updateFetchingAnimation().
+}
+
+/**
+ * While the selected server's probe is still pending, animate a
+ * "Fetching server list . . ." message in the same textbox as the offline
+ * warning, cycling one dot every 0.5s.
+ */
+void ServerList::updateFetchingAnimation()
+{
+	if (!_txtOfflineWarning)
+		return;
+
+	size_t active = getActiveRendezvousServer();
+	int status = (active < _serverStatus.size()) ? _serverStatus[active] : 1;
+	if (status != 0)
+		return; // only while the active server is still being probed
+
+	static const char* const kDots[4] = { "", " .", " . .", " . . ." };
+	int frame = (SDL_GetTicks() / 500) % 4;
+
+	_txtOfflineWarning->setText(std::string("Fetching server list") + kDots[frame]);
+	_txtOfflineWarning->setVisible(true);
 }
 
 /**
